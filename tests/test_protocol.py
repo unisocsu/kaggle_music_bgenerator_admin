@@ -4,6 +4,8 @@ import unittest
 import zipfile
 from io import BytesIO
 
+from scripts.push_music_worker import inject_job
+
 
 REQUEST_MARKER = "<!--music-request-->"
 
@@ -32,6 +34,20 @@ def parse_music_meta(body: str):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_worker_job_injection_preserves_future_import_position(self):
+        worker_source = (
+            "# -*- coding: utf-8 -*-\n"
+            '"""Private worker."""\n'
+            "from __future__ import annotations\n"
+            "VALUE = 1\n"
+        )
+        assembled = inject_job(worker_source, {"gh_repo": "owner/repo"})
+        compile(assembled, "music_worker.py", "exec")
+        self.assertLess(
+            assembled.index("from __future__ import annotations"),
+            assembled.index("JOB = "),
+        )
+
     def test_parse_request_created_by_browser(self):
         payload = {
             "version": 1,
