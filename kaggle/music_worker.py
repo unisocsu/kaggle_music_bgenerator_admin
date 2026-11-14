@@ -451,10 +451,17 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
     except Exception as exc:
         log(f"Generation failed for issue #{issue_number}: {type(exc).__name__}: {exc}")
         marker = f"<!--music-feedback-result:{feedback_id}-->" if feedback_id else STARTED_MARKER
+        failure_meta = {
+            "version": int((previous or {}).get("version", 0)),
+            "prompt": str((previous or {}).get("prompt") or request_data.get("prompt") or ""),
+            "lyrics": str((previous or {}).get("lyrics") or request_data.get("lyrics") or ""),
+        }
+        meta_marker = "<!--music-meta:" + json.dumps(failure_meta, ensure_ascii=False, separators=(",", ":")) + "-->"
         post_comment(issue_number,
                      f"{ASSISTANT_MARKER}\n## יצירת הגרסה נכשלה\n\n"
                      f"{type(exc).__name__}: {str(exc)[:1000]}\n\n"
-                     "בדוק את Kaggle diagnostics ב־Actions לפני ניסיון נוסף.\n{marker}\n{BOT_MARKER}")
+                     "בדוק את Kaggle diagnostics ב־Actions לפני ניסיון נוסף. אפשר לשלוח משוב חדש אחרי תיקון התקלה.\n"
+                     f"{meta_marker}\n{marker}\n{BOT_MARKER}")
     LAST_ACTIVITY = time.time()
 
 
