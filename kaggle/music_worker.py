@@ -161,6 +161,10 @@ def install_and_start_ace() -> None:
         "ACESTEP_LM_MODEL_PATH": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
         "ACESTEP_LM_BACKEND": JOB.get("lm_backend", "pt"),
         "ACESTEP_INIT_LLM": "true",
+        # Force DiT, VAE and LM checkpoints to download/load before the server is
+        # considered ready. Without this, /health can return 200 while models
+        # are still lazy-loaded on the first request.
+        "ACESTEP_NO_INIT": "false",
         "ACESTEP_DEVICE": "cuda",
         "ACESTEP_API_HOST": "127.0.0.1",
         "ACESTEP_API_PORT": "8001",
@@ -180,20 +184,48 @@ def install_and_start_ace() -> None:
         stderr=subprocess.STDOUT,
     )
 
-    deadline = time.time() + 18 * 60
+    # First-time checkpoint downloads and eager GPU initialization can take
+    # several minutes. Do not treat HTTP 200 alone as readiness: ACE-Step's
+    # health route is also available while lazy loading is enabled.
+    deadline = time.time() + 30 * 60
+    last_status_log = 0.0
     while time.time() < deadline:
         if SERVER_PROCESS.poll() is not None:
-            raise RuntimeError("ACE-Step API exited during startup; see Kaggle output artifact.")
+            tail = subprocess.getoutput(f"tail -n 100 {OUT / 'acestep-server.log'}")
+            raise RuntimeError(
+                "ACE-Step API exited during model initialization. Last server output:\n"
+                + tail[-7000:]
+            )
         try:
             response = requests.get(ACE_URL + "/health", timeout=4)
             if response.ok:
-                log("ACE-Step API is ready")
-                return
-        except requests.RequestException:
+                payload = response.json()
+                data = payload.get("data", payload) if isinstance(payload, dict) else {}
+                if not isinstance(data, dict):
+                    data = {}
+                dit_ready = bool(data.get("models_initialized")) and bool(data.get("loaded_model"))
+                lm_ready = bool(data.get("llm_initialized")) and bool(data.get("loaded_lm_model"))
+                if dit_ready and lm_ready:
+                    log(
+                        "ACE-Step models are loaded: "
+                        f"DiT={data.get('loaded_model')} · LM={data.get('loaded_lm_model')}"
+                    )
+                    return
+                now = time.time()
+                if now - last_status_log >= 30:
+                    log(
+                        "API responds, waiting for model initialization: "
+                        f"DiT loaded={dit_ready} · LM loaded={lm_ready}"
+                    )
+                    last_status_log = now
+        except (requests.RequestException, ValueError):
             pass
         time.sleep(6)
-    tail = subprocess.getoutput(f"tail -n 80 {OUT / 'acestep-server.log'}")
-    raise RuntimeError("ACE-Step startup timed out. Last server output:\n" + tail[-5000:])
+    tail = subprocess.getoutput(f"tail -n 120 {OUT / 'acestep-server.log'}")
+    raise RuntimeError(
+        "ACE-Step models did not finish loading within 30 minutes. "
+        "Last server output:\n" + tail[-7000:]
+    )
 
 
 def ace_post(path: str, payload: dict[str, Any], timeout: int = 3600) -> Any:
