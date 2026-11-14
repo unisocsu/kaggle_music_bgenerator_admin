@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       idle_minutes:
-        description: Minutes without new song requests before the worker stops
+        description: Minutes since the last successfully generated song before the worker stops
         required: true
-        default: "25"
+        default: "30"
         type: string
       model:
         description: ACE-Step DiT model
