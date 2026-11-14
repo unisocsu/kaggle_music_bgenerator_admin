@@ -254,7 +254,7 @@ async function dispatchWorker(){
     }
     await gh('POST',apiPath('/actions/workflows/start-music-worker.yml/dispatches'),{
       ref:'main',
-      inputs:{idle_minutes:'25',model:'acestep-v15-turbo',lm_model:'acestep-5Hz-lm-0.6B',lm_backend:'pt',accelerator:'NvidiaTeslaT4'}
+      inputs:{idle_minutes:'30',model:'acestep-v15-turbo',lm_model:'acestep-5Hz-lm-0.6B',lm_backend:'pt',accelerator:'NvidiaTeslaT4'}
     });
     S.dispatchAt=now;
     setWorker('מפעיל Kaggle והמודלים נטענים',true);
