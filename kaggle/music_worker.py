@@ -310,8 +310,8 @@ def task_failure_details(task_result: dict[str, Any], task_id: str) -> str:
 
 def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
                    language: str, version: int, feedback: str = "") -> tuple[pathlib.Path, str, str, dict[str, Any]]:
-    set_progress(issue_number, "מנתח את הבקשה ומשפר את תיאור המוזיקה",
-                 "מודל השפה מסדר את הסגנון והמילים. יוצג תקציר עריכות, לא תמליל חשיבה פנימי.")
+    set_progress(issue_number, "👀 ראיתי את הפרומפט",
+                 "מודל השפה קורא עכשיו את הבקשה ומכין את תיאור המוזיקה.")
     source_prompt = prompt
     if feedback:
         source_prompt = (
