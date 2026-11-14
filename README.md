@@ -41,7 +41,7 @@ The GitHub workflow uses its temporary `GITHUB_TOKEN` with Issues and Contents w
 
 ### 3. Deploy the page
 
-Enable GitHub Pages for branch `main`, folder `/docs`. Open the generated Pages URL, set the repository and GitHub token in Settings, then click **Start music worker**.
+In GitHub → Settings → Pages, set **Source** to **GitHub Actions**. The `Deploy Music Studio Pages` workflow publishes `docs/` automatically after page changes. Open the Pages URL, set the repository and GitHub token in Settings, then click **Start music worker**.
 
 ### 4. Generate music
 
