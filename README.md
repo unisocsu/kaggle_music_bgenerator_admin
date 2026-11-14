@@ -47,7 +47,7 @@ In GitHub → Settings → Pages, set **Source** to **GitHub Actions**. The `Dep
 
 Create a new project and enter a music description and optional lyrics. The default target is a 3-minute song, Hebrew vocal language, ACE-Step 1.5 Turbo, and the 0.6B LM for a stable first run on T4.
 
-The first Kaggle start must install ACE-Step and download its model weights. Later requests in the same worker session reuse the already-loaded models. The worker automatically shuts down after the configured idle period.
+The first Kaggle start must install ACE-Step and download its model weights. Later requests in the same worker session reuse the already-loaded models. By default, the worker stays active for **30 minutes after the last successfully generated and published song**. Chat messages and progress updates do not reset this timer; a new successful song does.
 
 ### Improve a previous version
 
