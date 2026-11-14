@@ -84,7 +84,7 @@ jobs:
         run: python scripts/push_music_worker.py
 
       - name: Wait for Kaggle kernel
-        if: steps.push.outputs.ref != ''
+        if: steps.push.outputs.deployed == 'true'
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
@@ -115,11 +115,13 @@ jobs:
         if: always()
         env:
           KERNEL_REF: ${{ steps.push.outputs.ref }}
+          KERNEL_DEPLOYED: ${{ steps.push.outputs.deployed }}
         run: |
           {
             echo "## Kaggle Music Studio"
             echo
             echo "Kernel: ${KERNEL_REF:-not created}"
+            echo "Pushed: ${KERNEL_DEPLOYED:-false}"
             echo
             echo "The worker writes live progress to music-request Issues and publishes completed ZIP files as Release assets."
           } >> "$GITHUB_STEP_SUMMARY"
