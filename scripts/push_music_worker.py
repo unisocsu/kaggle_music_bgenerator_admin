@@ -22,6 +22,19 @@ KERNEL_SLUG = "kaggle-music-studio-worker"
 KERNEL_TITLE = "Kaggle Music Studio Worker"
 
 
+def inject_job(source: str, job: dict[str, object]) -> str:
+    """Insert runtime configuration without moving a future import below code."""
+    assignment = "JOB = " + repr(job)
+    future_import = "from __future__ import annotations"
+    if future_import in source:
+        return source.replace(
+            future_import,
+            future_import + "\n\n" + assignment,
+            1,
+        )
+    return assignment + "\n\n" + source
+
+
 def run(cmd: list[str]) -> tuple[int, str]:
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     output = (proc.stdout or "") + (proc.stderr or "")
@@ -92,9 +105,10 @@ def main() -> None:
     push_dir.mkdir(parents=True)
 
     source = (REPO_ROOT / "kaggle" / "music_worker.py").read_text(encoding="utf-8")
-    (push_dir / "music_worker.py").write_text(
-        "JOB = " + repr(job) + "\n\n" + source, encoding="utf-8"
-    )
+    worker_source = inject_job(source, job)
+    # Compile before upload so Kaggle never receives an invalid generated script.
+    compile(worker_source, "music_worker.py", "exec")
+    (push_dir / "music_worker.py").write_text(worker_source, encoding="utf-8")
 
     metadata = {
         "id": f"{user}/{KERNEL_SLUG}",
