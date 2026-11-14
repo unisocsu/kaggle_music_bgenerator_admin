@@ -190,7 +190,9 @@ const S={
   dispatchAt:0,
   pollTimer:null,
   audioUrls:[],
+  audioCache:{},
 };
+let lastConversationKey='';
 const MARK={
   request:'<!--music-request-->',
   feedback:'<!--music-feedback-->',
@@ -406,11 +408,16 @@ async function addAudioCard(parent,meta){
   const release=document.createElement('a');release.href=meta.release_url||meta.zip_url;release.target='_blank';release.rel='noopener';release.textContent='פתיחת Release ↗';
   links.append(zip,mp3,release);card.append(links);parent.append(card);
   try{
+    if(S.audioCache[meta.zip_url]){
+      audio.src=S.audioCache[meta.zip_url];
+      state.textContent='האודיו כבר חולץ ל־Blob בזיכרון הדף.';
+      return;
+    }
     state.textContent='מוריד ZIP ומחלץ את האודיו לזיכרון הדפדפן…';
     const response=await fetch(meta.zip_url,{cache:'no-store'});
     if(!response.ok)throw new Error('הורדת ZIP נכשלה: '+response.status);
     const blob=await extractMp3FromZip(await response.arrayBuffer());
-    const objectUrl=URL.createObjectURL(blob);S.audioUrls.push(objectUrl);audio.src=objectUrl;
+    const objectUrl=URL.createObjectURL(blob);S.audioUrls.push(objectUrl);S.audioCache[meta.zip_url]=objectUrl;audio.src=objectUrl;
     state.textContent='ZIP חולץ ל־Blob. אפשר להשמיע כאן.';
   }catch(e){
     state.textContent='הנגן משתמש בקישור MP3 הישיר. חילוץ ZIP אוטומטי לא התאפשר ברשת הזו.';
@@ -422,6 +429,16 @@ async function loadConversation(){
   const comments=await gh('GET',apiPath('/issues/'+issueNo+'/comments?per_page=100'));
   if(!S.active||S.active.number!==issueNo)return;
   S.comments=comments||[];
+  const stableKey=issueNo+':'+(S.comments.filter(c=>!(c.body||'').includes(MARK.progress)).map(c=>c.id+':'+c.updated_at).join('|'));
+  const latestProgress=S.comments.filter(c=>(c.body||'').includes(MARK.progress)).slice(-1)[0];
+  if(stableKey===lastConversationKey){
+    const progressEl=$('#progress-'+issueNo);
+    if(progressEl&&latestProgress)progressEl.textContent=(latestProgress.body||'').replace(MARK.progress,'').replace('<!--music-studio-bot-->','').trim();
+    return;
+  }
+  lastConversationKey=stableKey;
+  S.audioUrls.forEach(url=>URL.revokeObjectURL(url));
+  S.audioUrls=[];
   $('#messages').textContent='';
   const req=requestData(S.active);
   const initial=addMessage('אתה',req.prompt||'בקשת מוזיקה', 'user');
@@ -433,7 +450,7 @@ async function loadConversation(){
     if(body.includes(MARK.progress)){
       const prog=document.createElement('div');prog.className='progress';
       const cleaned=body.replace(MARK.progress,'').replace('<!--music-studio-bot-->','').trim();
-      prog.textContent=cleaned;$('#messages').append(prog);continue;
+      prog.id='progress-'+issueNo;prog.textContent=cleaned;$('#messages').append(prog);continue;
     }
     if(body.includes(MARK.assistant)){
       const meta=parseMeta(body);
@@ -495,7 +512,7 @@ $('#menu').addEventListener('click',()=>$('#sidebar').classList.toggle('open'));
 
 if(S.token){
   refreshAll().catch(e=>toast(e.message));
-  dispatchWorker().catch(()=>{});
+  setWorker('מוכן לשליחת בקשה',false);
 }else{
   setWorker('הגדרות נדרשות',false);
 }
