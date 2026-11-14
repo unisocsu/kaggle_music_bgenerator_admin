@@ -1,0 +1,120 @@
+name: Start Kaggle music worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      idle_minutes:
+        description: Minutes without new song requests before the worker stops
+        required: true
+        default: "25"
+        type: string
+      model:
+        description: ACE-Step DiT model
+        required: true
+        default: acestep-v15-turbo
+        type: choice
+        options:
+          - acestep-v15-turbo
+          - acestep-v15-sft
+      lm_model:
+        description: ACE-Step 5Hz language model
+        required: true
+        default: acestep-5Hz-lm-0.6B
+        type: choice
+        options:
+          - acestep-5Hz-lm-0.6B
+          - acestep-5Hz-lm-1.7B
+      lm_backend:
+        description: Language-model backend
+        required: true
+        default: pt
+        type: choice
+        options:
+          - pt
+          - vllm
+      accelerator:
+        description: Kaggle GPU accelerator
+        required: true
+        default: NvidiaTeslaT4
+        type: choice
+        options:
+          - NvidiaTeslaT4
+          - NvidiaTeslaT4Highmem
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: kaggle-music-worker
+  cancel-in-progress: false
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Kaggle CLI
+        run: pip install -q kaggle
+
+      - name: Push private music worker to Kaggle
+        id: push
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          IN_IDLE_MINUTES: ${{ inputs.idle_minutes }}
+          IN_MODEL: ${{ inputs.model }}
+          IN_LM_MODEL: ${{ inputs.lm_model }}
+          IN_LM_BACKEND: ${{ inputs.lm_backend }}
+          IN_ACCELERATOR: ${{ inputs.accelerator }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python scripts/push_music_worker.py
+
+      - name: Wait for Kaggle kernel
+        if: steps.push.outputs.ref != ''
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+        run: python scripts/wait_kaggle.py
+
+      - name: Download Kaggle diagnostics
+        if: always() && steps.push.outputs.ref != ''
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+        run: |
+          mkdir -p out
+          kaggle kernels output "$KERNEL_REF" -p out || true
+          find out -maxdepth 2 -type f -printf '%p (%s bytes)\n' || true
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-music-worker-diagnostics
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        env:
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+        run: |
+          {
+            echo "## Kaggle Music Studio"
+            echo
+            echo "Kernel: ${KERNEL_REF:-not created}"
+            echo
+            echo "The worker writes live progress to music-request Issues and publishes completed ZIP files as Release assets."
+          } >> "$GITHUB_STEP_SUMMARY"
