@@ -1,0 +1,531 @@
+# -*- coding: utf-8 -*-
+"""Private Kaggle worker for ACE-Step 1.5."""
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import time
+import zipfile
+from typing import Any
+
+import requests
+
+JOB = globals().get("JOB", {})
+OUT = pathlib.Path("/kaggle/working/music-studio")
+OUT.mkdir(parents=True, exist_ok=True)
+
+GH_API = "https://api.github.com"
+GH_REPO = JOB.get("gh_repo", "")
+GH_OWNER = JOB.get("owner", "")
+GH_TOKEN = JOB.get("gh_token", "")
+GH_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "Authorization": f"Bearer {GH_TOKEN}",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+ACE_URL = "http://127.0.0.1:8001"
+BOT_MARKER = "<!--music-studio-bot-->"
+PROGRESS_MARKER = "<!--music-progress-->"
+STARTED_MARKER = "<!--music-started-->"
+ASSISTANT_MARKER = "<!--music-assistant-->"
+FEEDBACK_MARKER = "<!--music-feedback-->"
+REQUEST_MARKER = "<!--music-request-->"
+
+HTTP = requests.Session()
+HTTP.headers.update(GH_HEADERS)
+PROGRESS_IDS: dict[int, int] = {}
+LAST_ACTIVITY = time.time()
+SERVER_PROCESS: subprocess.Popen | None = None
+
+
+def log(message: str) -> None:
+    print(f"[music-studio] {message}", flush=True)
+
+
+def gh(method: str, path: str, **kwargs: Any) -> requests.Response:
+    url = path if path.startswith("https://") else GH_API + path
+    response = HTTP.request(method, url, timeout=(15, 90), **kwargs)
+    if response.status_code >= 400:
+        raise RuntimeError(f"GitHub API {method} {path}: HTTP {response.status_code}: {response.text[:800]}")
+    return response
+
+
+def gh_json(method: str, path: str, **kwargs: Any) -> Any:
+    response = gh(method, path, **kwargs)
+    return response.json() if response.content else {}
+
+
+def issue_comments(issue_number: int) -> list[dict[str, Any]]:
+    return gh_json("GET", f"/repos/{GH_REPO}/issues/{issue_number}/comments?per_page=100")
+
+
+def post_comment(issue_number: int, body: str) -> dict[str, Any]:
+    return gh_json("POST", f"/repos/{GH_REPO}/issues/{issue_number}/comments", json={"body": body})
+
+
+def update_comment(comment_id: int, body: str) -> dict[str, Any]:
+    return gh_json("PATCH", f"/repos/{GH_REPO}/issues/comments/{comment_id}", json={"body": body})
+
+
+def set_progress(issue_number: int, title: str, details: str = "") -> None:
+    global LAST_ACTIVITY
+    LAST_ACTIVITY = time.time()
+    body = f"{PROGRESS_MARKER}\n**{title}**"
+    if details:
+        body += f"\n\n{details}"
+    body += f"\n\n{BOT_MARKER}"
+    comment_id = PROGRESS_IDS.get(issue_number)
+    if comment_id is None:
+        for comment in issue_comments(issue_number):
+            if PROGRESS_MARKER in (comment.get("body") or "") and comment.get("user", {}).get("login") == "github-actions[bot]":
+                comment_id = int(comment["id"])
+                PROGRESS_IDS[issue_number] = comment_id
+                break
+    if comment_id:
+        update_comment(comment_id, body)
+    else:
+        created = post_comment(issue_number, body)
+        PROGRESS_IDS[issue_number] = int(created["id"])
+
+
+def parse_request(issue: dict[str, Any]) -> dict[str, Any] | None:
+    body = issue.get("body") or ""
+    index = body.find(REQUEST_MARKER)
+    if index < 0:
+        return None
+    raw = body[index + len(REQUEST_MARKER):].strip().split("<!--/music-request-->")[0].strip()
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def latest_assistant_meta(comments: list[dict[str, Any]]) -> dict[str, Any]:
+    for comment in reversed(comments):
+        body = comment.get("body") or ""
+        match = re.search(r"<!--music-meta:(.*?)-->", body, re.S)
+        if ASSISTANT_MARKER in body and match:
+            try:
+                result = json.loads(match.group(1))
+                if isinstance(result, dict):
+                    return result
+            except ValueError:
+                pass
+    return {}
+
+
+def done_for_feedback(comments: list[dict[str, Any]], comment_id: int) -> bool:
+    marker = f"<!--music-feedback-result:{comment_id}-->"
+    return any(marker in (item.get("body") or "") for item in comments)
+
+
+def list_music_issues() -> list[dict[str, Any]]:
+    issues = gh_json(
+        "GET",
+        f"/repos/{GH_REPO}/issues?state=open&labels=music-request&per_page=100&sort=created&direction=asc",
+    )
+    return [
+        item for item in issues
+        if "pull_request" not in item and item.get("user", {}).get("login") == GH_OWNER
+    ]
+
+
+def install_and_start_ace() -> None:
+    global SERVER_PROCESS
+    if SERVER_PROCESS and SERVER_PROCESS.poll() is None:
+        return
+
+    repo_dir = pathlib.Path("/kaggle/temp/ACE-Step-1.5")
+    if not repo_dir.exists():
+        log("Cloning ACE-Step 1.5")
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(repo_dir)],
+            check=True,
+        )
+
+    log("Installing ACE-Step dependencies; first start downloads the model weights")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "uv"], check=True)
+    subprocess.run(["uv", "sync", "--no-dev"], cwd=repo_dir, check=True)
+
+    venv_python = repo_dir / ".venv" / "bin" / "python"
+    if not venv_python.exists():
+        raise RuntimeError("ACE-Step virtual environment was not created by uv sync.")
+
+    env = dict(os.environ)
+    env.update({
+        "ACESTEP_CONFIG_PATH": JOB.get("model", "acestep-v15-turbo"),
+        "ACESTEP_LM_MODEL_PATH": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
+        "ACESTEP_LM_BACKEND": JOB.get("lm_backend", "pt"),
+        "ACESTEP_INIT_LLM": "true",
+        "ACESTEP_DEVICE": "cuda",
+        "ACESTEP_API_HOST": "127.0.0.1",
+        "ACESTEP_API_PORT": "8001",
+        "ACESTEP_USE_FLASH_ATTENTION": "false",
+        "HF_HOME": "/kaggle/temp/huggingface",
+        "TOKENIZERS_PARALLELISM": "false",
+    })
+    pathlib.Path(env["HF_HOME"]).mkdir(parents=True, exist_ok=True)
+    log("Visible GPU inventory: " + subprocess.getoutput("nvidia-smi -L"))
+
+    server_log = open(OUT / "acestep-server.log", "a", encoding="utf-8")
+    SERVER_PROCESS = subprocess.Popen(
+        [str(venv_python), "acestep/api_server.py"],
+        cwd=repo_dir,
+        env=env,
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
+    )
+
+    deadline = time.time() + 18 * 60
+    while time.time() < deadline:
+        if SERVER_PROCESS.poll() is not None:
+            raise RuntimeError("ACE-Step API exited during startup; see Kaggle output artifact.")
+        try:
+            response = requests.get(ACE_URL + "/health", timeout=4)
+            if response.ok:
+                log("ACE-Step API is ready")
+                return
+        except requests.RequestException:
+            pass
+        time.sleep(6)
+    tail = subprocess.getoutput(f"tail -n 80 {OUT / 'acestep-server.log'}")
+    raise RuntimeError("ACE-Step startup timed out. Last server output:\n" + tail[-5000:])
+
+
+def ace_post(path: str, payload: dict[str, Any], timeout: int = 3600) -> Any:
+    response = requests.post(ACE_URL + path, json=payload, timeout=(15, timeout))
+    response.raise_for_status()
+    result = response.json()
+    if result.get("error"):
+        raise RuntimeError(str(result["error"]))
+    if int(result.get("code", 200)) >= 400:
+        raise RuntimeError(str(result.get("error") or result))
+    return result.get("data", result)
+
+
+def format_prompt(prompt: str, lyrics: str, duration: int, language: str) -> tuple[str, str, dict[str, Any]]:
+    try:
+        data = ace_post("/format_input", {
+            "prompt": prompt[:4000],
+            "lyrics": lyrics[:12000],
+            "param_obj": json.dumps({"duration": duration, "language": language}, ensure_ascii=False),
+        }, timeout=600)
+        if not isinstance(data, dict):
+            data = {}
+        caption = str(data.get("caption") or data.get("prompt") or prompt).strip() or prompt
+        formatted_lyrics = str(data.get("lyrics") or lyrics).strip()
+        return caption, formatted_lyrics, data
+    except Exception as exc:
+        log(f"format_input fallback: {type(exc).__name__}: {exc}")
+        return prompt, lyrics, {"format_warning": str(exc)[:400]}
+
+
+def parse_result(value: Any) -> dict[str, Any]:
+    if isinstance(value, list) and value:
+        value = value[0]
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+            if isinstance(value, list) and value:
+                value = value[0]
+        except ValueError:
+            return {}
+    return value if isinstance(value, dict) else {}
+
+
+def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
+                   language: str, version: int, feedback: str = "") -> tuple[pathlib.Path, str, str, dict[str, Any]]:
+    set_progress(issue_number, "מנתח את הבקשה ומשפר את תיאור המוזיקה",
+                 "מודל השפה מסדר את הסגנון והמילים. יוצג תקציר עריכות, לא תמליל חשיבה פנימי.")
+    source_prompt = prompt
+    if feedback:
+        source_prompt = (
+            f"{prompt}\n\nUser revision request: {feedback}\n"
+            "Apply the requested musical changes while preserving the parts the user did not ask to change. "
+            "Be specific about arrangement, instrumentation, energy, vocal phrasing and song structure."
+        )
+    caption, new_lyrics, format_meta = format_prompt(source_prompt, lyrics, duration, language)
+
+    set_progress(issue_number, "מכין משימת יצירת אודיו",
+                 f"גרסה {version} · אורך {duration} שניות · שפה: {language}")
+    payload = {
+        "prompt": caption,
+        "lyrics": new_lyrics,
+        "thinking": True,
+        "use_format": False,
+        "vocal_language": language,
+        "audio_duration": duration,
+        "duration": duration,
+        "audio_format": "mp3",
+        "model": JOB.get("model", "acestep-v15-turbo"),
+        "lm_model_path": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
+        "lm_backend": JOB.get("lm_backend", "pt"),
+        "inference_steps": 8,
+        "shift": 3.0,
+        "batch_size": 1,
+        "use_cot_caption": True,
+        "use_cot_language": True,
+    }
+    task = ace_post("/release_task", payload, timeout=600)
+    task_id = task.get("task_id") or task.get("id") if isinstance(task, dict) else None
+    if not task_id:
+        raise RuntimeError(f"ACE-Step returned no task_id: {str(task)[:800]}")
+
+    set_progress(issue_number, "יוצר את השיר",
+                 "המשימה התקבלה ב־ACE-Step. הסטטוס נבדק מול תור היצירה של המודל.")
+    task_result: dict[str, Any] = {}
+    last_update = 0.0
+    deadline = time.time() + max(45 * 60, duration * 90)
+    while time.time() < deadline:
+        query = ace_post("/query_result", {"task_id_list": [task_id]}, timeout=60)
+        entries = query if isinstance(query, list) else query.get("data", []) if isinstance(query, dict) else []
+        if isinstance(entries, dict):
+            entries = [entries]
+        if entries:
+            task_result = entries[0] if isinstance(entries[0], dict) else {}
+            nested = parse_result(task_result.get("result"))
+            if nested:
+                task_result.update(nested)
+            status = int(task_result.get("status", 0))
+            if status == 2:
+                raise RuntimeError(str(task_result.get("error") or task_result.get("message") or "ACE-Step generation failed"))
+            if status == 1:
+                break
+        if time.time() - last_update > 35:
+            set_progress(issue_number, "יוצר את השיר",
+                         "המודל עדיין עובד. עדכון זה מבוסס על סטטוס המשימה, לא על אחוז משוער.")
+            last_update = time.time()
+        time.sleep(8)
+    else:
+        raise TimeoutError("ACE-Step generation exceeded the per-song timeout.")
+
+    audio_path = str(task_result.get("file") or task_result.get("audio_path") or "")
+    if not audio_path:
+        raise RuntimeError("ACE-Step completed but returned no audio file path.")
+    audio_url = audio_path if audio_path.startswith("http") else ACE_URL + (audio_path if audio_path.startswith("/") else "/" + audio_path)
+
+    set_progress(issue_number, "מוריד את קובץ האודיו", "השיר נוצר; מוריד את ה־MP3 לאריזה.")
+    response = requests.get(audio_url, timeout=(30, 600))
+    response.raise_for_status()
+    audio_file = OUT / f"song-v{version}.mp3"
+    audio_file.write_bytes(response.content)
+    if not audio_file.stat().st_size:
+        raise RuntimeError("Downloaded audio is empty.")
+
+    meta = {
+        "task_id": task_id,
+        "version": version,
+        "duration_seconds": duration,
+        "vocal_language": language,
+        "model": JOB.get("model", "acestep-v15-turbo"),
+        "lm_model": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
+        "caption": caption,
+        "lyrics": new_lyrics,
+        "format_metadata": format_meta,
+        "seed_value": task_result.get("seed_value"),
+        "generation_info": task_result.get("generation_info"),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    return audio_file, caption, new_lyrics, meta
+
+
+def get_release(issue_number: int) -> dict[str, Any]:
+    tag = f"music-issue-{issue_number}"
+    response = requests.get(f"{GH_API}/repos/{GH_REPO}/releases/tags/{tag}", headers=GH_HEADERS, timeout=30)
+    if response.status_code == 200:
+        return response.json()
+    if response.status_code != 404:
+        response.raise_for_status()
+    return gh_json("POST", f"/repos/{GH_REPO}/releases", json={
+        "tag_name": tag,
+        "name": f"Music project #{issue_number}",
+        "body": f"Generated music versions for https://github.com/{GH_REPO}/issues/{issue_number}.",
+        "draft": False,
+        "prerelease": False,
+        "target_commitish": "main",
+    })
+
+
+def upload_asset(release: dict[str, Any], path: pathlib.Path, name: str, content_type: str) -> dict[str, Any]:
+    existing = next((a for a in release.get("assets", []) if a.get("name") == name), None)
+    if existing:
+        gh("DELETE", f"/repos/{GH_REPO}/releases/assets/{existing['id']}")
+    upload_url = release["upload_url"].split("{", 1)[0] + "?name=" + requests.utils.quote(name)
+    headers = dict(GH_HEADERS)
+    headers["Content-Type"] = content_type
+    with path.open("rb") as source:
+        response = requests.post(upload_url, headers=headers, data=source, timeout=(30, 1800))
+    if response.status_code >= 400:
+        raise RuntimeError(f"Release asset upload failed: HTTP {response.status_code}: {response.text[:800]}")
+    return response.json()
+
+
+def publish_version(issue_number: int, version: int, audio_file: pathlib.Path,
+                    caption: str, lyrics: str, meta: dict[str, Any], feedback: str) -> dict[str, str]:
+    set_progress(issue_number, "אורז את התוצאה ומעלה ל־Release",
+                 "קובץ ה־ZIP נבנה עכשיו. נכסי ה־Release זמינים אחרי שההעלאה מסתיימת.")
+    bundle = OUT / f"bundle-v{version}"
+    shutil.rmtree(bundle, ignore_errors=True)
+    bundle.mkdir(parents=True)
+    shutil.copy2(audio_file, bundle / "song.mp3")
+    (bundle / "prompt.txt").write_text(caption + "\n", encoding="utf-8")
+    (bundle / "lyrics.txt").write_text(lyrics + "\n", encoding="utf-8")
+    (bundle / "improvement-notes.txt").write_text(feedback + "\n", encoding="utf-8")
+    (bundle / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    (bundle / "README.txt").write_text(
+        "Kaggle Music Studio output\n"
+        f"Version: {version}\n"
+        "Audio: song.mp3\nPrompt: prompt.txt\nLyrics: lyrics.txt\nMetadata: metadata.json\n",
+        encoding="utf-8",
+    )
+
+    zip_path = OUT / f"music-v{version}.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for file_path in sorted(bundle.iterdir()):
+            archive.write(file_path, arcname=file_path.name)
+
+    release = get_release(issue_number)
+    zip_asset = upload_asset(release, zip_path, f"music-v{version}.zip", "application/zip")
+    mp3_asset = upload_asset(release, audio_file, f"song-v{version}.mp3", "audio/mpeg")
+    release_body = (
+        "Generated with ACE-Step 1.5 on Kaggle.\n\n"
+        f"Project: https://github.com/{GH_REPO}/issues/{issue_number}\n\n"
+        "Each version ZIP contains the MP3, prompt, lyrics, improvement notes and metadata.\n\n"
+        f"Latest published version: v{version}."
+    )
+    gh("PATCH", f"/repos/{GH_REPO}/releases/{release['id']}", json={"body": release_body})
+    return {
+        "release_url": release.get("html_url", ""),
+        "zip_url": zip_asset.get("browser_download_url", ""),
+        "mp3_url": mp3_asset.get("browser_download_url", ""),
+    }
+
+
+def publish_result(issue_number: int, version: int, caption: str, lyrics: str,
+                   meta: dict[str, Any], links: dict[str, str], feedback_id: int | None) -> None:
+    summary = (
+        f"## גרסה {version} מוכנה 🎵\n\n"
+        "**תקציר תכנון:** תיאור הסגנון והמילים עובדו לפי הבקשה. "
+        "בגרסאות שיפור הוחל המשוב על הפרומפט והמילים הקודמים.\n\n"
+        f"**הפרומפט המעודכן:**\n\n{caption}\n\n"
+        f"**מילים:**\n\n{lyrics[:5000] or 'לא הוזנו מילים.'}\n\n"
+        f"[הורדת ZIP]({links['zip_url']}) · [השמעת MP3 / הורדה]({links['mp3_url']}) · "
+        f"[פתיחת Release]({links['release_url']})\n\n"
+        "כתוב מה תרצה לשנות כדי ליצור גרסה נוספת."
+    )
+    public_meta = {
+        "version": version, "prompt": caption, "lyrics": lyrics,
+        "release_url": links["release_url"], "zip_url": links["zip_url"],
+        "mp3_url": links["mp3_url"], "task_id": meta.get("task_id"),
+    }
+    meta_marker = "<!--music-meta:" + json.dumps(public_meta, ensure_ascii=False, separators=(",", ":")) + "-->"
+    feedback_marker = f"<!--music-feedback-result:{feedback_id}-->" if feedback_id else STARTED_MARKER
+    post_comment(issue_number, f"{ASSISTANT_MARKER}\n{summary}\n\n{meta_marker}\n{feedback_marker}\n{BOT_MARKER}")
+
+
+def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedback: str = "",
+                      feedback_id: int | None = None, previous: dict[str, Any] | None = None) -> None:
+    global LAST_ACTIVITY
+    issue_number = int(issue["number"])
+    previous = previous or {}
+    version = int(previous.get("version", 0)) + 1
+    duration = max(30, min(300, int(request_data.get("duration", 180))))
+    language = str(request_data.get("language", "he"))[:8]
+    base_prompt = str(previous.get("prompt") or request_data.get("prompt") or "")[:4000]
+    lyrics = str(previous.get("lyrics") or request_data.get("lyrics") or "")[:12000]
+
+    try:
+        audio_file, caption, new_lyrics, meta = generate_audio(
+            issue_number, base_prompt, lyrics, duration, language, version, feedback
+        )
+        links = publish_version(issue_number, version, audio_file, caption, new_lyrics, meta, feedback)
+        publish_result(issue_number, version, caption, new_lyrics, meta, links, feedback_id)
+        set_progress(issue_number, f"גרסה {version} פורסמה בהצלחה",
+                     f"[ZIP]({links['zip_url']}) · [MP3]({links['mp3_url']}) · [Release]({links['release_url']})")
+    except Exception as exc:
+        log(f"Generation failed for issue #{issue_number}: {type(exc).__name__}: {exc}")
+        marker = f"<!--music-feedback-result:{feedback_id}-->" if feedback_id else STARTED_MARKER
+        post_comment(issue_number,
+                     f"{ASSISTANT_MARKER}\n## יצירת הגרסה נכשלה\n\n"
+                     f"{type(exc).__name__}: {str(exc)[:1000]}\n\n"
+                     "בדוק את Kaggle diagnostics ב־Actions לפני ניסיון נוסף.\n{marker}\n{BOT_MARKER}")
+    LAST_ACTIVITY = time.time()
+
+
+def process_issue(issue: dict[str, Any]) -> bool:
+    issue_number = int(issue["number"])
+    request_data = parse_request(issue)
+    if not request_data:
+        return False
+    comments = issue_comments(issue_number)
+
+    if not any(STARTED_MARKER in (c.get("body") or "") for c in comments):
+        set_progress(issue_number, "בקשת מוזיקה התקבלה", "מכין את סביבת היצירה.")
+        handle_generation(issue, request_data)
+        return True
+
+    latest = latest_assistant_meta(comments)
+    if not latest:
+        return False
+    for comment in comments:
+        author = comment.get("user", {}).get("login")
+        body = comment.get("body") or ""
+        comment_id = int(comment.get("id", 0))
+        if author != GH_OWNER or FEEDBACK_MARKER not in body or done_for_feedback(comments, comment_id):
+            continue
+        feedback = body.split(FEEDBACK_MARKER, 1)[1].strip()
+        if not feedback:
+            post_comment(issue_number, f"{ASSISTANT_MARKER}\nכתוב בבקשה מה תרצה לשפר.\n<!--music-feedback-result:{comment_id}-->")
+            return True
+        set_progress(issue_number, "התקבל משוב לגרסה חדשה",
+                     "מודל השפה מתאים את תיאור המוזיקה והמילים למשוב שלך.")
+        handle_generation(issue, request_data, feedback, comment_id, latest)
+        return True
+    return False
+
+
+def main() -> None:
+    global LAST_ACTIVITY
+    if not GH_TOKEN or not GH_REPO or not GH_OWNER:
+        raise SystemExit("Missing GitHub worker credentials.")
+    idle_minutes = max(5, min(120, int(JOB.get("idle_minutes", 25))))
+    max_runtime = float(JOB.get("max_hours", 5.2)) * 3600
+    start = time.time()
+    log(f"Worker started for {GH_REPO}; idle timeout is {idle_minutes} minutes.")
+    try:
+        while time.time() - start < max_runtime:
+            issues = list_music_issues()
+            if issues and (SERVER_PROCESS is None or SERVER_PROCESS.poll() is not None):
+                for issue in issues:
+                    set_progress(int(issue["number"]), "מכין סביבת יצירה", "מתקין ACE-Step וטוען את המודלים ל־GPU.")
+                install_and_start_ace()
+
+            did_work = False
+            for issue in issues:
+                if process_issue(issue):
+                    did_work = True
+                    break
+            if did_work:
+                continue
+            if time.time() - LAST_ACTIVITY >= idle_minutes * 60:
+                log("Idle timeout reached; stopping the worker.")
+                break
+            time.sleep(12)
+    finally:
+        if SERVER_PROCESS and SERVER_PROCESS.poll() is None:
+            SERVER_PROCESS.terminate()
+            try:
+                SERVER_PROCESS.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                SERVER_PROCESS.kill()
+        log("Worker stopped.")
+
+
+if __name__ == "__main__":
+    main()
