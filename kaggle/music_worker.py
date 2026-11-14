@@ -166,6 +166,9 @@ def install_and_start_ace() -> None:
         # are still lazy-loaded on the first request.
         "ACESTEP_NO_INIT": "false",
         "ACESTEP_DEVICE": "cuda",
+        # Tesla T4 is pre-Ampere; ACE-Step reports fp16 latent overflow/NaNs
+        # on this GPU. Use fp32 for numerically stable diffusion latents.
+        "ACESTEP_DTYPE": "float32",
         "ACESTEP_API_HOST": "127.0.0.1",
         "ACESTEP_API_PORT": "8001",
         "ACESTEP_USE_FLASH_ATTENTION": "false",
@@ -174,6 +177,7 @@ def install_and_start_ace() -> None:
     })
     pathlib.Path(env["HF_HOME"]).mkdir(parents=True, exist_ok=True)
     log("Visible GPU inventory: " + subprocess.getoutput("nvidia-smi -L"))
+    log(f"ACE-Step precision configuration: ACESTEP_DTYPE={env.get('ACESTEP_DTYPE', 'default')} (Tesla T4 stability mode)")
 
     server_log = open(OUT / "acestep-server.log", "a", encoding="utf-8")
     SERVER_PROCESS = subprocess.Popen(
