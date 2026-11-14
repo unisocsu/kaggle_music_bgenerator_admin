@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b1020">
+<title>Kaggle Music Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#111a2d;--panel2:#17233a;--line:#263653;--text:#edf3ff;--muted:#93a4c0;--accent:#8b9cff;--accent2:#5d73e8;--ok:#54d6a0;--warn:#f5bd62;--bad:#ff788b;--shadow:0 18px 50px #0005}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,"Segoe UI",Arial,sans-serif}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);padding:9px 13px}
+button:hover{border-color:var(--accent);filter:brightness(1.08)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:linear-gradient(135deg,#596fe5,#8b78e8);border:0;color:white;font-weight:700}
+button.ghost{background:transparent}
+a{color:#aab8ff}
+#app{height:100%;display:grid;grid-template-columns:300px minmax(0,1fr)}
+#sidebar{background:#0e1729;border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+#sidehead{padding:18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.logo{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,#657bf2,#c17ee8);font-size:20px}
+.brand{font-weight:800;font-size:16px}
+.subbrand{font-size:11px;color:var(--muted);margin-top:2px}
+#newProject{margin:14px}
+#projects{overflow:auto;padding:0 10px 14px;flex:1}
+.project{width:100%;display:block;text-align:right;margin:4px 0;padding:11px 12px;border-radius:10px;background:transparent;border-color:transparent}
+.project.active{background:var(--panel2);border-color:var(--line)}
+.project .ptitle{font-weight:650;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.project .pmeta{font-size:11px;color:var(--muted);display:block;margin-top:4px}
+#sidefoot{padding:12px;border-top:1px solid var(--line);display:flex;gap:8px}
+#sidefoot button{flex:1}
+#main{display:flex;flex-direction:column;min-width:0;min-height:0}
+#topbar{min-height:62px;padding:10px 18px;border-bottom:1px solid var(--line);display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:#0d1526}
+#menu{display:none}
+#workerState{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:12px;margin-inline-start:4px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--bad)}
+.dot.on{background:var(--ok);box-shadow:0 0 0 4px #54d6a01a}
+#topbar .spacer{flex:1}
+#conversation{flex:1;min-height:0;overflow:auto;padding:24px 18px}
+#messages{max-width:900px;margin:auto;display:flex;flex-direction:column;gap:13px}
+.welcome{border:1px solid var(--line);border-radius:18px;background:radial-gradient(ellipse at 85% 0%,#6478ed22,transparent 60%),var(--panel);padding:26px;box-shadow:var(--shadow)}
+.welcome h1{font-size:27px;margin:0 0 8px}
+.welcome p{color:var(--muted);line-height:1.7;margin:5px 0}
+.pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:16px}
+.pill{font-size:11px;border:1px solid var(--line);border-radius:99px;padding:5px 9px;color:#c5d0e7;background:#ffffff08}
+.message{max-width:min(820px,95%);border:1px solid var(--line);border-radius:15px;padding:12px 15px;line-height:1.65;overflow-wrap:anywhere;white-space:normal}
+.message.user{align-self:flex-start;background:#263557;border-color:#354a78;border-bottom-right-radius:4px}
+.message.assistant{align-self:stretch;background:var(--panel);border-bottom-left-radius:4px}
+.message.system{align-self:stretch;background:#111f2c;border-color:#244d48}
+.message .who{font-size:11px;color:var(--muted);margin-bottom:5px}
+.message p{margin:6px 0}
+.message pre{direction:ltr;text-align:left;white-space:pre-wrap;overflow:auto;background:#070c16;border-radius:8px;padding:10px}
+.progress{border-right:3px solid var(--accent);padding:3px 12px;background:#8b9cff0b;color:#dce3ff;font-size:13px}
+.progress small{display:block;color:var(--muted);margin-top:3px}
+.card{background:#0c1424;border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:12px}
+.cardhead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.cardtitle{font-weight:750}
+audio{width:100%;margin-top:12px;height:42px}
+.links{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.links a{display:inline-block;text-decoration:none;border:1px solid var(--line);padding:7px 10px;border-radius:9px;font-size:12px}
+details{margin-top:10px;border-top:1px solid var(--line);padding-top:8px;color:var(--muted)}
+details summary{cursor:pointer;color:#cbd5ef}
+details pre{white-space:pre-wrap;overflow-wrap:anywhere;direction:auto;color:#d8e1f7;background:#080e19;padding:10px;border-radius:9px}
+#composer{border-top:1px solid var(--line);padding:13px 18px 16px;background:#0e1729}
+#composerInner{max-width:900px;margin:auto}
+#chatInput{width:100%;resize:vertical;min-height:66px;max-height:180px;border:1px solid var(--line);border-radius:13px;background:var(--panel2);color:var(--text);padding:12px;outline:none}
+#chatInput:focus,input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+#composerRow{display:flex;gap:9px;align-items:center;margin-top:8px}
+#composerHint{font-size:11px;color:var(--muted);flex:1}
+#newForm{display:none;max-width:900px;margin:auto;background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:20px;box-shadow:var(--shadow)}
+#newForm h2{margin:0 0 5px}
+#newForm .help{color:var(--muted);font-size:12px;margin:0 0 14px;line-height:1.6}
+label{display:block;font-size:12px;color:#c9d4eb;margin:12px 0 6px}
+input,select,textarea.field{width:100%;background:#0b1322;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#eaf0ff;color:#111a2d;border-radius:99px;padding:9px 16px;box-shadow:var(--shadow);display:none;z-index:40;font-size:13px}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:16px;max-width:520px;width:92vw;padding:20px}
+dialog::backdrop{background:#0009;backdrop-filter:blur(4px)}
+dialog small{color:var(--muted);line-height:1.6;display:block;margin-top:9px}
+.dialogactions{display:flex;gap:8px;margin-top:15px;justify-content:flex-start}
+#processNote{font-size:11px;color:var(--muted);padding:0 3px;margin-top:7px}
+@media(max-width:760px){
+ #app{grid-template-columns:1fr}
+ #sidebar{position:fixed;z-index:20;inset:0 0 0 auto;width:84vw;max-width:320px;transform:translateX(110%);transition:transform .2s;box-shadow:var(--shadow)}
+ #sidebar.open{transform:none}
+ #menu{display:inline-block}
+ #conversation{padding:14px 10px}
+ #composer{padding:10px}
+ #topbar{padding:8px 10px}
+ .grid2{grid-template-columns:1fr}
+ .welcome h1{font-size:23px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div id="sidehead">
+      <div class="logo">♫</div>
+      <div><div class="brand">Music Studio</div><div class="subbrand">ACE-Step · Kaggle GPU</div></div>
+    </div>
+    <button id="newProject" class="primary">＋ יצירת שיר חדש</button>
+    <div id="projects"></div>
+    <div id="sidefoot">
+      <button id="settingsBtn">⚙ הגדרות</button>
+      <button id="repoBtn">GitHub ↗</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <header id="topbar">
+      <button id="menu">☰</button>
+      <strong id="pageTitle">Music Studio</strong>
+      <span id="workerState"><i class="dot" id="workerDot"></i><span id="workerText">המנוע לא הופעל</span></span>
+      <span class="spacer"></span>
+      <button id="startWorker" class="ghost">הפעל מנוע Kaggle</button>
+      <button id="refreshBtn" class="ghost">רענון</button>
+    </header>
+
+    <section id="conversation">
+      <div id="messages">
+        <section class="welcome">
+          <h1>יוצרים שיר, מקשיבים, ומשפרים. 🎶</h1>
+          <p>תאר את הסגנון, הכלים, הקצב והאווירה. ACE-Step 1.5 ייצור שיר עם מילים ושירה, ויעלה את התוצאה ל־GitHub Release.</p>
+          <div class="pills"><span class="pill">עברית ושפות נוספות</span><span class="pill">שירים באורך 2–5 דקות</span><span class="pill">גרסאות שיפור</span><span class="pill">ZIP + נגן בדף</span></div>
+          <p style="margin-top:16px">כדי להתחיל, לחץ על <b>יצירת שיר חדש</b>. יש להגדיר פעם אחת GitHub token ו־Kaggle secrets.</p>
+        </section>
+      </div>
+      <section id="newForm">
+        <h2>שיר חדש</h2>
+        <p class="help">תאר במילים שלך את הצליל שאתה מחפש. אפשר להוסיף מילים משלך; מודל השפה יכול לעצב ולסדר את התיאור והמילים לפני היצירה.</p>
+        <label for="songTitle">שם הפרויקט</label>
+        <input id="songTitle" maxlength="90" placeholder="למשל: פופ אלקטרוני עם פסנתר">
+        <label for="songPrompt">תיאור מוזיקלי</label>
+        <textarea class="field" id="songPrompt" rows="4" placeholder="סגנון, אווירה, כלי נגינה, קצב, מבנה, סוג השירה..."></textarea>
+        <label for="songLyrics">מילים (אפשר להשאיר ריק)</label>
+        <textarea class="field" id="songLyrics" rows="6" placeholder="[בית 1]&#10;...&#10;&#10;[פזמון]&#10;..."></textarea>
+        <div class="grid2">
+          <div><label for="songLanguage">שפת השירה</label><select id="songLanguage"><option value="he" selected>עברית</option><option value="en">אנגלית</option><option value="unknown">זיהוי אוטומטי</option><option value="es">ספרדית</option><option value="fr">צרפתית</option><option value="ar">ערבית</option><option value="yi">יידיש</option></select></div>
+          <div><label for="songDuration">אורך</label><select id="songDuration"><option value="120">2 דקות</option><option value="180" selected>3 דקות</option><option value="240">4 דקות</option><option value="300">5 דקות</option></select></div>
+        </div>
+        <div class="dialogactions"><button id="createSong" class="primary">צור שיר והפעל Kaggle</button><button id="cancelNew">ביטול</button></div>
+      </section>
+    </section>
+
+    <footer id="composer" hidden>
+      <div id="composerInner">
+        <textarea id="chatInput" placeholder="מה תרצה לשפר בגרסה הבאה? למשל: הפזמון צריך להיות עוצמתי יותר, להוסיף גיטרה ולהרגיע את התופים..."></textarea>
+        <div id="composerRow"><span id="composerHint">המשוב יישלח לאותו פרויקט וייצור גרסה חדשה.</span><button id="sendFeedback" class="primary">שלח לשיפור</button></div>
+        <div id="processNote">תהליך גלוי: שלבי עבודה, תקציר תכנון, פרומפט מעודכן והגדרות. המערכת אינה מציגה תמליל חשיבה פנימי.</div>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<dialog id="settingsDialog">
+  <h2 style="margin:0">הגדרות חיבור</h2>
+  <label for="repoInput">GitHub repository (owner/name)</label>
+  <input id="repoInput" placeholder="unisocsu/kaggle_music_bgenerator_admin" autocomplete="off">
+  <label for="tokenInput">Fine-grained GitHub token</label>
+  <input id="tokenInput" type="password" placeholder="github_pat_..." autocomplete="off">
+  <small>הרשאות לריפו הזה בלבד: Issues – Read and write; Actions – Read and write; Metadata – Read. הטוקן נשמר ב־sessionStorage של הלשונית הזו, לא בתוך הקוד.</small>
+  <small>המאגר הציבורי חושף את ה־Issues, הפרומפטים, המילים וקובצי ה־Release לציבור. ה־Kaggle Kernel עצמו מוגדר Private.</small>
+  <div class="dialogactions"><button id="saveSettings" class="primary">שמור</button><button id="closeSettings">סגור</button></div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const STORE = {
+  get(k,d=''){try{return sessionStorage.getItem(k) ?? d}catch(e){return d}},
+  set(k,v){try{sessionStorage.setItem(k,v)}catch(e){}}
+};
+function guessRepo(){
+  const host=location.hostname;
+  if(host.endsWith('.github.io')){
+    const first=location.pathname.split('/').filter(Boolean)[0];
+    if(first) return host.split('.')[0]+'/'+first;
+  }
+  return 'unisocsu/kaggle_music_bgenerator_admin';
+}
+const S={
+  repo:STORE.get('repo',guessRepo()),
+  token:STORE.get('token',''),
+  issues:[],
+  active:null,
+  comments:[],
+  dispatchAt:0,
+  pollTimer:null,
+  audioUrls:[],
+};
+const MARK={
+  request:'<!--music-request-->',
+  feedback:'<!--music-feedback-->',
+  progress:'<!--music-progress-->',
+  assistant:'<!--music-assistant-->',
+  meta:'<!--music-meta:',
+};
+function toast(text){
+  const el=$('#toast');el.textContent=text;el.style.display='block';
+  clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.style.display='none',3200);
+}
+function esc(text){
+  return String(text??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function apiPath(path){return '/repos/'+S.repo+path}
+async function gh(method,path,body){
+  if(!S.token) throw new Error('חסר GitHub token. פתח הגדרות והוסף token.');
+  const headers={Accept:'application/vnd.github+json',Authorization:'Bearer '+S.token,'X-GitHub-Api-Version':'2022-11-28'};
+  if(body!==undefined)headers['Content-Type']='application/json';
+  const response=await fetch('https://api.github.com'+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});
+  if(response.status===204)return null;
+  const data=await response.json().catch(()=>({message:'GitHub returned a non-JSON response'}));
+  if(!response.ok)throw new Error('GitHub '+response.status+': '+(data.message||JSON.stringify(data)));
+  return data;
+}
+function requireSettings(){
+  if(!S.token||!S.repo.includes('/')){
+    $('#settingsDialog').showModal();
+    toast('הוסף GitHub token כדי להתחבר');
+    return false;
+  }
+  return true;
+}
+function setWorker(text,on){
+  $('#workerText').textContent=text;
+  $('#workerDot').classList.toggle('on',!!on);
+}
+async function ensureLabel(){
+  const path=apiPath('/labels/music-request');
+  try{await gh('GET',path)}
+  catch(e){
+    if(!String(e.message).includes('404'))throw e;
+    try{await gh('POST',apiPath('/labels'),{name:'music-request',color:'7b61ff',description:'Music generation requests'})}
+    catch(createError){if(!String(createError.message).includes('already_exists'))throw createError}
+  }
+}
+async function dispatchWorker(){
+  if(!requireSettings())return;
+  const now=Date.now();
+  if(now-S.dispatchAt<180000){setWorker('Kaggle הופעל / בתהליך התחברות',true);return}
+  setWorker('בודק את Kaggle…',false);
+  try{
+    const runs=await gh('GET',apiPath('/actions/workflows/start-music-worker.yml/runs?per_page=10'));
+    const active=(runs.workflow_runs||[]).some(r=>['queued','in_progress','waiting','requested'].includes(r.status));
+    if(active){
+      setWorker('Kaggle פעיל',true);
+      S.dispatchAt=now;
+      return;
+    }
+    await gh('POST',apiPath('/actions/workflows/start-music-worker.yml/dispatches'),{
+      ref:'main',
+      inputs:{idle_minutes:'25',model:'acestep-v15-turbo',lm_model:'acestep-5Hz-lm-0.6B',lm_backend:'pt',accelerator:'NvidiaTeslaT4'}
+    });
+    S.dispatchAt=now;
+    setWorker('מפעיל Kaggle והמודלים נטענים',true);
+    toast('נשלחה הפעלה ל־Kaggle. הטעינה הראשונה עשויה לקחת זמן.');
+  }catch(e){
+    setWorker('לא ניתן להפעיל את Kaggle',false);
+    throw e;
+  }
+}
+function requestData(issue){
+  const body=issue.body||'';
+  const i=body.indexOf(MARK.request);
+  if(i<0)return {};
+  const raw=body.slice(i+MARK.request.length).split('<!--/music-request-->')[0].trim();
+  try{return JSON.parse(raw)}catch(e){return {}}
+}
+async function loadIssues(){
+  if(!requireSettings())return;
+  const result=await gh('GET',apiPath('/issues?state=all&labels=music-request&per_page=100&sort=updated&direction=desc'));
+  S.issues=(result||[]).filter(i=>!i.pull_request);
+  renderProjects();
+  if(S.active){
+    const updated=S.issues.find(i=>i.number===S.active.number);
+    if(updated)S.active=updated;
+    else S.active=null;
+  }
+}
+function renderProjects(){
+  const root=$('#projects');root.textContent='';
+  for(const issue of S.issues){
+    const b=document.createElement('button');b.className='project'+(S.active&&S.active.number===issue.number?' active':'');
+    const title=document.createElement('span');title.className='ptitle';title.textContent=issue.title;
+    const meta=document.createElement('span');meta.className='pmeta';meta.textContent='#'+issue.number+' · '+new Date(issue.updated_at).toLocaleString('he-IL');
+    b.append(title,meta);b.addEventListener('click',()=>selectIssue(issue));root.append(b);
+  }
+}
+function showNewForm(){
+  $('#newForm').style.display='block';$('#messages').style.display='none';$('#composer').hidden=true;
+  $('#pageTitle').textContent='יצירת שיר חדש';$('#songPrompt').focus();
+  $('#sidebar').classList.remove('open');
+}
+function hideNewForm(){
+  $('#newForm').style.display='none';$('#messages').style.display='flex';
+}
+async function createSong(){
+  if(!requireSettings())return;
+  const prompt=$('#songPrompt').value.trim();
+  if(!prompt){toast('צריך לתאר איזה שיר ליצור');$('#songPrompt').focus();return}
+  const lyrics=$('#songLyrics').value.trim();
+  const title=$('#songTitle').value.trim()||prompt.slice(0,65);
+  const payload={version:1,prompt,lyrics,language:$('#songLanguage').value,duration:Number($('#songDuration').value)};
+  $('#createSong').disabled=true;$('#createSong').textContent='שולח בקשה…';
+  try{
+    await ensureLabel();
+    const issue=await gh('POST',apiPath('/issues'),{
+      title:title.slice(0,120),
+      body:'בקשת יצירת מוזיקה דרך Music Studio.\n\n'+MARK.request+'\n'+JSON.stringify(payload)+'\n<!--/music-request-->',
+      labels:['music-request']
+    });
+    S.active=issue;hideNewForm();$('#composer').hidden=false;
+    await loadIssues();await selectIssue(issue);
+    await dispatchWorker();
+  }catch(e){toast(e.message)}
+  finally{$('#createSong').disabled=false;$('#createSong').textContent='צור שיר והפעל Kaggle'}
+}
+function selectIssue(issue){
+  S.active=issue;renderProjects();hideNewForm();
+  $('#composer').hidden=false;$('#pageTitle').textContent=issue.title;
+  $('#sidebar').classList.remove('open');
+  loadConversation();
+}
+function cleanAssistant(body){
+  let text=body.replace(MARK.assistant,'').replace(/<!--music-meta:[\s\S]*?-->/,'').replace(/<!--music-feedback-result:\d+-->/g,'').replace(/<!--music-started-->/g,'').replace(/<!--music-studio-bot-->/g,'').trim();
+  return text;
+}
+function parseMeta(body){
+  const match=body.match(/<!--music-meta:([\s\S]*?)-->/);
+  if(!match)return null;
+  try{return JSON.parse(match[1])}catch(e){return null}
+}
+function linkifyText(text){
+  const root=document.createElement('div');
+  const lines=String(text||'').split('\n');
+  for(const line of lines){
+    const p=document.createElement('p');
+    const re=/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    let last=0,m;
+    while((m=re.exec(line))){
+      if(m.index>last)p.append(document.createTextNode(line.slice(last,m.index)));
+      const a=document.createElement('a');a.href=m[2];a.textContent=m[1];a.target='_blank';a.rel='noopener noreferrer';p.append(a);last=re.lastIndex;
+    }
+    if(last<line.length)p.append(document.createTextNode(line.slice(last)));
+    if(!line.trim())p.style.minHeight='7px';
+    root.append(p);
+  }
+  return root;
+}
+function addMessage(who,text,cls){
+  const box=document.createElement('article');box.className='message '+cls;
+  const label=document.createElement('div');label.className='who';label.textContent=who;box.append(label);
+  box.append(linkifyText(text));$('#messages').append(box);
+  return box;
+}
+async function extractMp3FromZip(zipBuffer){
+  if(!('DecompressionStream' in window))throw new Error('הדפדפן אינו תומך בחילוץ ZIP מובנה');
+  const bytes=new Uint8Array(zipBuffer);const view=new DataView(zipBuffer);
+  let eocd=-1;
+  for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--){
+    if(view.getUint32(i,true)===0x06054b50){eocd=i;break}
+  }
+  if(eocd<0)throw new Error('מבנה ZIP לא תקין');
+  const total=view.getUint16(eocd+10,true);let offset=view.getUint32(eocd+16,true);
+  for(let n=0;n<total;n++){
+    if(view.getUint32(offset,true)!==0x02014b50)break;
+    const method=view.getUint16(offset+10,true);
+    const compressed=view.getUint32(offset+20,true);
+    const nameLen=view.getUint16(offset+28,true);
+    const extraLen=view.getUint16(offset+30,true);
+    const commentLen=view.getUint16(offset+32,true);
+    const local=view.getUint32(offset+42,true);
+    const name=new TextDecoder().decode(bytes.slice(offset+46,offset+46+nameLen));
+    if(name.toLowerCase().endsWith('.mp3')){
+      if(view.getUint32(local,true)!==0x04034b50)throw new Error('Local ZIP entry is invalid');
+      const localName=view.getUint16(local+26,true),localExtra=view.getUint16(local+28,true);
+      const start=local+30+localName+localExtra;
+      const compressedBytes=bytes.slice(start,start+compressed);
+      let audioBlob;
+      if(method===0)audioBlob=new Blob([compressedBytes],{type:'audio/mpeg'});
+      else if(method===8){
+        const stream=new Blob([compressedBytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        audioBlob=await new Response(stream).blob();
+      }else throw new Error('ZIP compression method not supported: '+method);
+      return audioBlob;
+    }
+    offset+=46+nameLen+extraLen+commentLen;
+  }
+  throw new Error('לא נמצא קובץ MP3 בתוך ה־ZIP');
+}
+async function addAudioCard(parent,meta){
+  if(!meta||!meta.zip_url)return;
+  const card=document.createElement('div');card.className='card';
+  const header=document.createElement('div');header.className='cardhead';
+  const title=document.createElement('div');title.className='cardtitle';title.textContent='♫ גרסה '+(meta.version||'')+' · נגן מוזיקה';
+  const state=document.createElement('small');state.textContent='מכין נגן…';state.style.color='var(--muted)';
+  header.append(title,state);card.append(header);
+  const audio=document.createElement('audio');audio.controls=true;audio.preload='none';audio.src=meta.mp3_url||'';
+  card.append(audio);
+  const links=document.createElement('div');links.className='links';
+  const zip=document.createElement('a');zip.href=meta.zip_url;zip.download='music-v'+(meta.version||'1')+'.zip';zip.textContent='⬇ הורדת ZIP';
+  const mp3=document.createElement('a');mp3.href=meta.mp3_url||'';mp3.download='song.mp3';mp3.textContent='⬇ הורדת MP3';
+  const release=document.createElement('a');release.href=meta.release_url||meta.zip_url;release.target='_blank';release.rel='noopener';release.textContent='פתיחת Release ↗';
+  links.append(zip,mp3,release);card.append(links);parent.append(card);
+  try{
+    state.textContent='מוריד ZIP ומחלץ את האודיו לזיכרון הדפדפן…';
+    const response=await fetch(meta.zip_url,{cache:'no-store'});
+    if(!response.ok)throw new Error('הורדת ZIP נכשלה: '+response.status);
+    const blob=await extractMp3FromZip(await response.arrayBuffer());
+    const objectUrl=URL.createObjectURL(blob);S.audioUrls.push(objectUrl);audio.src=objectUrl;
+    state.textContent='ZIP חולץ ל־Blob. אפשר להשמיע כאן.';
+  }catch(e){
+    state.textContent='הנגן משתמש בקישור MP3 הישיר. חילוץ ZIP אוטומטי לא התאפשר ברשת הזו.';
+  }
+}
+async function loadConversation(){
+  if(!S.active)return;
+  const issueNo=S.active.number;
+  const comments=await gh('GET',apiPath('/issues/'+issueNo+'/comments?per_page=100'));
+  if(!S.active||S.active.number!==issueNo)return;
+  S.comments=comments||[];
+  $('#messages').textContent='';
+  const req=requestData(S.active);
+  const initial=addMessage('אתה',req.prompt||'בקשת מוזיקה', 'user');
+  if(req.lyrics){
+    const d=document.createElement('details');const s=document.createElement('summary');s.textContent='המילים המקוריות';const pre=document.createElement('pre');pre.textContent=req.lyrics;d.append(s,pre);initial.append(d);
+  }
+  for(const comment of S.comments){
+    const body=comment.body||'';
+    if(body.includes(MARK.progress)){
+      const prog=document.createElement('div');prog.className='progress';
+      const cleaned=body.replace(MARK.progress,'').replace('<!--music-studio-bot-->','').trim();
+      prog.textContent=cleaned;$('#messages').append(prog);continue;
+    }
+    if(body.includes(MARK.assistant)){
+      const meta=parseMeta(body);
+      const box=addMessage('Music Studio · ACE-Step',cleanAssistant(body),'assistant');
+      if(meta){
+        const promptDetails=document.createElement('details');const sum=document.createElement('summary');sum.textContent='הפרומפט המעודכן והמילים';const pre=document.createElement('pre');pre.textContent='PROMPT\n'+(meta.prompt||'')+'\n\nLYRICS\n'+(meta.lyrics||'');promptDetails.append(sum,pre);box.append(promptDetails);
+        await addAudioCard(box,meta);
+      }
+      continue;
+    }
+    if(body.includes(MARK.feedback)){
+      const text=body.split(MARK.feedback,2)[1].replace('<!--music-studio-bot-->','').trim();
+      addMessage(comment.user?.login===S.repo.split('/')[0]?'אתה':'הודעה',text,'user');
+    }
+  }
+  const end=$('#conversation');end.scrollTop=end.scrollHeight;
+}
+async function sendFeedback(){
+  if(!S.active||!requireSettings())return;
+  const text=$('#chatInput').value.trim();if(!text)return;
+  $('#sendFeedback').disabled=true;
+  try{
+    await gh('POST',apiPath('/issues/'+S.active.number+'/comments'),{body:MARK.feedback+'\n'+text});
+    $('#chatInput').value='';
+    await loadConversation();
+    await dispatchWorker();
+    toast('המשוב נשלח. תיווצר גרסה חדשה לאחר עיבודו.');
+  }catch(e){toast(e.message)}
+  finally{$('#sendFeedback').disabled=false}
+}
+async function startManual(){
+  if(!requireSettings())return;
+  try{await dispatchWorker()}catch(e){toast(e.message)}
+}
+async function refreshAll(){
+  try{await loadIssues();if(S.active)await loadConversation()}catch(e){toast(e.message)}
+}
+function openSettings(){
+  $('#repoInput').value=S.repo;$('#tokenInput').value=S.token;$('#settingsDialog').showModal();
+}
+function saveSettings(){
+  const repo=$('#repoInput').value.trim(),token=$('#tokenInput').value.trim();
+  if(!repo.includes('/')||repo.split('/').length!==2){toast('פורמט ריפו: owner/name');return}
+  if(!token){toast('צריך GitHub token');return}
+  S.repo=repo;S.token=token;STORE.set('repo',repo);STORE.set('token',token);
+  $('#settingsDialog').close();toast('ההגדרות נשמרו בלשונית הזו.');refreshAll();
+}
+$('#newProject').addEventListener('click',showNewForm);
+$('#createSong').addEventListener('click',createSong);
+$('#cancelNew').addEventListener('click',()=>hideNewForm());
+$('#settingsBtn').addEventListener('click',openSettings);
+$('#saveSettings').addEventListener('click',saveSettings);
+$('#closeSettings').addEventListener('click',()=>$('#settingsDialog').close());
+$('#startWorker').addEventListener('click',startManual);
+$('#refreshBtn').addEventListener('click',refreshAll);
+$('#sendFeedback').addEventListener('click',sendFeedback);
+$('#repoBtn').addEventListener('click',()=>window.open('https://github.com/'+S.repo,'_blank','noopener'));
+$('#menu').addEventListener('click',()=>$('#sidebar').classList.toggle('open'));
+
+if(S.token){
+  refreshAll().catch(e=>toast(e.message));
+  dispatchWorker().catch(()=>{});
+}else{
+  setWorker('הגדרות נדרשות',false);
+}
+S.pollTimer=setInterval(()=>{
+  if(!S.token)return;
+  loadIssues().then(()=>S.active&&loadConversation()).catch(()=>{});
+},9000);
+</script>
+</body>
+</html>
