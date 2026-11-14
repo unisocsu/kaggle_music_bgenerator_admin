@@ -269,6 +269,41 @@ def parse_result(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def task_failure_details(task_result: dict[str, Any], task_id: str) -> str:
+    """Recover the ACE-Step exception when /query_result omits its error."""
+    for key in ("error", "exception", "traceback", "error_message", "message"):
+        value = task_result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:5000]
+
+    nested = parse_result(task_result.get("result"))
+    for key in ("error", "exception", "traceback", "error_message", "message"):
+        value = nested.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:5000]
+
+    # ACE-Step's local-cache response omits JobRecord.error on failed jobs.
+    # The server log retains the task-specific exception and traceback.
+    log_path = OUT / "acestep-server.log"
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        marker = f"Job {task_id} FAILED:"
+        for index in range(len(lines) - 1, -1, -1):
+            if marker in lines[index]:
+                return "\n".join(lines[index:index + 70])[-5000:]
+    except OSError as exc:
+        return f"Could not read ACE-Step server log: {type(exc).__name__}: {exc}"
+
+    safe_keys = sorted(
+        key for key in task_result.keys()
+        if key not in {"result", "prompt", "lyrics", "file", "wave"}
+    )
+    return (
+        "ACE-Step returned failed status without an error field. "
+        f"task_id={task_id}; response_keys={safe_keys}"
+    )
+
+
 def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
                    language: str, version: int, feedback: str = "") -> tuple[pathlib.Path, str, str, dict[str, Any]]:
     set_progress(issue_number, "מנתח את הבקשה ומשפר את תיאור המוזיקה",
@@ -328,7 +363,9 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
                 task_result.update(nested)
             status = int(task_result.get("status", 0))
             if status == 2:
-                raise RuntimeError(str(task_result.get("error") or task_result.get("message") or "ACE-Step generation failed"))
+                details = task_failure_details(task_result, str(task_id))
+                log(f"ACE-Step task {task_id} failed; diagnostic details:\n{details[-3000:]}")
+                raise RuntimeError(f"ACE-Step generation failed: {details[:1000]}")
             if status == 1:
                 break
         if time.time() - last_update > 35:
