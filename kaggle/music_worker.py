@@ -39,7 +39,7 @@ REQUEST_MARKER = "<!--music-request-->"
 HTTP = requests.Session()
 HTTP.headers.update(GH_HEADERS)
 PROGRESS_IDS: dict[int, int] = {}
-LAST_ACTIVITY = time.time()
+LAST_SONG_CREATED = time.time()
 SERVER_PROCESS: subprocess.Popen | None = None
 
 
@@ -73,8 +73,6 @@ def update_comment(comment_id: int, body: str) -> dict[str, Any]:
 
 
 def set_progress(issue_number: int, title: str, details: str = "") -> None:
-    global LAST_ACTIVITY
-    LAST_ACTIVITY = time.time()
     body = f"{PROGRESS_MARKER}\n**{title}**"
     if details:
         body += f"\n\n{details}"
@@ -436,7 +434,7 @@ def publish_result(issue_number: int, version: int, caption: str, lyrics: str,
 
 def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedback: str = "",
                       feedback_id: int | None = None, previous: dict[str, Any] | None = None) -> None:
-    global LAST_ACTIVITY
+    global LAST_SONG_CREATED
     issue_number = int(issue["number"])
     previous = previous or {}
     version = int(previous.get("version", 0)) + 1
@@ -450,6 +448,7 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
             issue_number, base_prompt, lyrics, duration, language, version, feedback
         )
         links = publish_version(issue_number, version, audio_file, caption, new_lyrics, meta, feedback)
+        LAST_SONG_CREATED = time.time()
         publish_result(issue_number, version, caption, new_lyrics, meta, links, feedback_id)
         set_progress(issue_number, f"גרסה {version} פורסמה בהצלחה",
                      f"[ZIP]({links['zip_url']}) · [MP3]({links['mp3_url']}) · [Release]({links['release_url']})")
@@ -467,7 +466,6 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
                      f"{type(exc).__name__}: {str(exc)[:1000]}\n\n"
                      "בדוק את Kaggle diagnostics ב־Actions לפני ניסיון נוסף. אפשר לשלוח משוב חדש אחרי תיקון התקלה.\n"
                      f"{meta_marker}\n{marker}\n{BOT_MARKER}")
-    LAST_ACTIVITY = time.time()
 
 
 def process_issue(issue: dict[str, Any]) -> bool:
@@ -503,13 +501,14 @@ def process_issue(issue: dict[str, Any]) -> bool:
 
 
 def main() -> None:
-    global LAST_ACTIVITY
+    global LAST_SONG_CREATED
     if not GH_TOKEN or not GH_REPO or not GH_OWNER:
         raise SystemExit("Missing GitHub worker credentials.")
-    idle_minutes = max(5, min(120, int(JOB.get("idle_minutes", 25))))
+    idle_minutes = max(5, min(120, int(JOB.get("idle_minutes", 30))))
     max_runtime = float(JOB.get("max_hours", 5.2)) * 3600
     start = time.time()
-    log(f"Worker started for {GH_REPO}; idle timeout is {idle_minutes} minutes.")
+    LAST_SONG_CREATED = start
+    log(f"Worker started for {GH_REPO}; it stays warm until {idle_minutes} minutes pass without a successfully published song.")
     try:
         while time.time() - start < max_runtime:
             issues = list_music_issues()
@@ -525,8 +524,9 @@ def main() -> None:
                     break
             if did_work:
                 continue
-            if time.time() - LAST_ACTIVITY >= idle_minutes * 60:
-                log("Idle timeout reached; stopping the worker.")
+            idle_seconds = time.time() - LAST_SONG_CREATED
+            if idle_seconds >= idle_minutes * 60:
+                log(f"No successfully published song for {idle_minutes} minutes; stopping the worker.")
                 break
             time.sleep(12)
     finally:
