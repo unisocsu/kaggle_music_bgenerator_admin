@@ -1,0 +1,39 @@
+name: Test Music Studio
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Python syntax
+        run: python -m compileall -q scripts kaggle tests
+      - name: Extract browser JavaScript
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          html = Path("docs/index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script>([\s\S]*?)</script>", html)
+          if not scripts:
+              raise SystemExit("No inline browser script found")
+          Path("/tmp/music-studio.js").write_text("\n\n".join(scripts), encoding="utf-8")
+          PY
+      - name: Browser JavaScript syntax
+        run: node --check /tmp/music-studio.js
+      - name: Protocol tests
+        run: python -m unittest discover -s tests -v
