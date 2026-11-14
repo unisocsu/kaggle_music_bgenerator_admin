@@ -261,17 +261,21 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
         "use_format": False,
         "vocal_language": language,
         "audio_duration": duration,
-        "duration": duration,
         "audio_format": "mp3",
         "model": JOB.get("model", "acestep-v15-turbo"),
         "lm_model_path": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
         "lm_backend": JOB.get("lm_backend", "pt"),
         "inference_steps": 8,
-        "shift": 3.0,
         "batch_size": 1,
         "use_cot_caption": True,
         "use_cot_language": True,
     }
+    if not new_lyrics.strip():
+        payload["sample_mode"] = True
+        payload["sample_query"] = (
+            caption + f". Generate a complete song with vocals and lyrics in {language}. "
+            "Use a clear verse/chorus structure."
+        )
     task = ace_post("/release_task", payload, timeout=600)
     task_id = task.get("task_id") or task.get("id") if isinstance(task, dict) else None
     if not task_id:
@@ -318,6 +322,7 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
     if not audio_file.stat().st_size:
         raise RuntimeError("Downloaded audio is empty.")
 
+    actual_lyrics = str(task_result.get("lyrics") or new_lyrics or "").strip()
     meta = {
         "task_id": task_id,
         "version": version,
@@ -326,13 +331,13 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
         "model": JOB.get("model", "acestep-v15-turbo"),
         "lm_model": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
         "caption": caption,
-        "lyrics": new_lyrics,
+        "lyrics": actual_lyrics,
         "format_metadata": format_meta,
         "seed_value": task_result.get("seed_value"),
         "generation_info": task_result.get("generation_info"),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    return audio_file, caption, new_lyrics, meta
+    return audio_file, caption, actual_lyrics, meta
 
 
 def get_release(issue_number: int) -> dict[str, Any]:
