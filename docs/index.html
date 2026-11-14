@@ -429,8 +429,8 @@ async function loadConversation(){
   const comments=await gh('GET',apiPath('/issues/'+issueNo+'/comments?per_page=100'));
   if(!S.active||S.active.number!==issueNo)return;
   S.comments=comments||[];
-  const stableKey=issueNo+':'+(S.comments.filter(c=>!(c.body||'').includes(MARK.progress)).map(c=>c.id+':'+c.updated_at).join('|'));
   const latestProgress=S.comments.filter(c=>(c.body||'').includes(MARK.progress)).slice(-1)[0];
+  const stableKey=issueNo+':'+(S.comments.filter(c=>!(c.body||'').includes(MARK.progress)).map(c=>c.id+':'+c.updated_at).join('|'))+':progress:'+((latestProgress&&latestProgress.id)||'');
   if(stableKey===lastConversationKey){
     const progressEl=$('#progress-'+issueNo);
     if(progressEl&&latestProgress)progressEl.textContent=(latestProgress.body||'').replace(MARK.progress,'').replace('<!--music-studio-bot-->','').trim();
@@ -439,6 +439,7 @@ async function loadConversation(){
   lastConversationKey=stableKey;
   S.audioUrls.forEach(url=>URL.revokeObjectURL(url));
   S.audioUrls=[];
+  S.audioCache={};
   $('#messages').textContent='';
   const req=requestData(S.active);
   const initial=addMessage('אתה',req.prompt||'בקשת מוזיקה', 'user');
