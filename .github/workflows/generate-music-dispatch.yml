@@ -118,7 +118,7 @@ jobs:
         run: |
           mkdir -p out
           kaggle kernels output "$KERNEL_REF" -p out || true
-          find out -maxdepth 2 -type f -printf '%p (%s bytes)\\n' || true
+          find out -maxdepth 2 -type f -printf '%p (%s bytes)\n' || true
 
       - name: Upload diagnostics
         if: always()
