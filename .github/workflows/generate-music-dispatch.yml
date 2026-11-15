@@ -70,6 +70,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Validate Python sources
+        run: |
+          python -m py_compile scripts/push_music_worker.py kaggle/music_worker.py
+
       - name: Install Kaggle CLI and dependencies
         run: |
           python -m pip install --upgrade pip
