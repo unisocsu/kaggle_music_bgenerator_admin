@@ -137,10 +137,10 @@ def create_generation_issue(repo: str, token: str) -> str:
     issue = github_api("POST", repo, "/issues", token, {
         "title": title,
         "body": (
-            "Music Studio dispatch request.\\n\\n"
-            "<!--music-request-->\\n"
+            "Music Studio dispatch request.\n\n"
+            "<!--music-request-->\n"
             + json.dumps(request_data, ensure_ascii=False, separators=(",", ":"))
-            + "\\n<!--/music-request-->"
+            + "\n<!--/music-request-->"
         ),
         "labels": ["music-request"],
     })
