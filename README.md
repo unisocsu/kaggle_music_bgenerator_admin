@@ -60,6 +60,12 @@ Open the same project and send specific feedback such as:
 
 The worker passes the original prompt, current lyrics and your feedback through ACE-Step's prompt/lyrics formatting LM, records the revised prompt, and generates the next version. This text-feedback loop does not claim to perform objective audio-quality analysis.
 
+## Generate directly from GitHub Actions
+
+Open **Actions → Generate music (Kaggle dispatch) → Run workflow**. The dispatch form accepts a project title, music prompt, optional lyrics, duration (2–5 minutes), vocal language, style direction and extra instructions. It creates a tagged music request and starts the private Kaggle worker automatically.
+
+The dispatch workflow deliberately pins the generation profile to **Turbo DiT + 0.6B LM + PyTorch on one Tesla T4**. This is the conservative profile for the current T4 setup. Before downloading or loading model weights, the worker checks free VRAM on `cuda:0`, estimates the float32 DiT/LM weight footprint plus a runtime reserve, and stops before loading if the free memory is insufficient. Two T4 cards are treated as separate devices; their VRAM is never added together. The estimate is a preflight guard, not a guarantee against every runtime allocation spike.
+
 ## Runtime notes
 
 - Kaggle GPU availability and session limits are controlled by Kaggle and can change.
