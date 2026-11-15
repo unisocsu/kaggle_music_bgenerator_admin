@@ -198,10 +198,6 @@ def main() -> None:
         "run_id": os.getenv("GITHUB_RUN_ID", str(int(time.time()))),
     }
 
-    issue_url = ""
-    if os.getenv("IN_CREATE_REQUEST", "").lower() == "true":
-        issue_url = create_generation_issue(repo, gh_token)
-
     push_dir = pathlib.Path("/tmp/kaggle-music-worker")
     shutil.rmtree(push_dir, ignore_errors=True)
     push_dir.mkdir(parents=True)
@@ -210,6 +206,10 @@ def main() -> None:
     worker_source = inject_job(source, job)
     # Compile before upload so Kaggle never receives an invalid generated script.
     compile(worker_source, "music_worker.py", "exec")
+
+    issue_url = ""
+    if os.getenv("IN_CREATE_REQUEST", "").lower() == "true":
+        issue_url = create_generation_issue(repo, gh_token)
     (push_dir / "music_worker.py").write_text(worker_source, encoding="utf-8")
 
     metadata = {
