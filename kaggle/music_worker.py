@@ -2,6 +2,8 @@
 """Private Kaggle worker for ACE-Step 1.5."""
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import pathlib
@@ -130,8 +132,71 @@ def list_music_issues() -> list[dict[str, Any]]:
     )
     return [
         item for item in issues
-        if "pull_request" not in item and item.get("user", {}).get("login") == GH_OWNER
+        if "pull_request" not in item
+        and (
+            item.get("user", {}).get("login") == GH_OWNER
+            or (
+                item.get("user", {}).get("login") == "github-actions[bot]"
+                and REQUEST_MARKER in (item.get("body") or "")
+            )
+        )
     ]
+
+
+def gpu_memory_preflight() -> None:
+    """Estimate peak VRAM before downloading/loading checkpoints; never pool GPUs."""
+    try:
+        raw = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=15,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Could not inspect GPU memory before model loading: {exc}") from exc
+
+    rows = list(csv.reader(io.StringIO(raw)))
+    if not rows:
+        raise RuntimeError("No CUDA GPU was reported by nvidia-smi.")
+
+    # The worker uses cuda:0. Two T4 cards are separate 15GB devices, not one 30GB pool.
+    first = [cell.strip() for cell in rows[0]]
+    if len(first) < 4:
+        raise RuntimeError(f"Unexpected nvidia-smi memory output: {raw[:500]}")
+    gpu_index, gpu_name = first[0], first[1]
+    total_gb = float(first[2]) / 1024
+    free_gb = float(first[3]) / 1024
+
+    lm_name = str(JOB.get("lm_model", "acestep-5Hz-lm-0.6B"))
+    # ACE-Step upstream estimates: 2B DiT ~4.46GB and LM 0.6B ~1.2GB
+    # in bf16. The worker forces float32 for T4 stability, so weight estimates
+    # are doubled; 2GB is reserved for CUDA/runtime/activations.
+    lm_bf16_gb = {"acestep-5Hz-lm-0.6B": 1.2, "acestep-5Hz-lm-1.7B": 3.4}
+    if lm_name not in lm_bf16_gb:
+        raise RuntimeError(f"Unsupported LM for the conservative T4 profile: {lm_name}")
+    estimated_dit_gb = 4.46 * 2
+    estimated_lm_gb = lm_bf16_gb[lm_name] * 2
+    runtime_reserve_gb = 2.0
+    required_gb = estimated_dit_gb + estimated_lm_gb + runtime_reserve_gb
+
+    log(
+        f"GPU preflight: GPU {gpu_index} {gpu_name}; "
+        f"total={total_gb:.1f}GB free={free_gb:.1f}GB; "
+        f"estimated weights={estimated_dit_gb + estimated_lm_gb:.1f}GB "
+        f"+ runtime reserve={runtime_reserve_gb:.1f}GB; "
+        f"required free VRAM={required_gb:.1f}GB."
+    )
+    if free_gb < required_gb:
+        raise RuntimeError(
+            f"GPU memory preflight refused model loading: need about {required_gb:.1f}GB "
+            f"free on cuda:{gpu_index}, but only {free_gb:.1f}GB is free. "
+            "Choose the 0.6B LM / Tesla T4 profile or free GPU memory first. "
+            "Multiple GPUs are not combined."
+        )
 
 
 def install_and_start_ace() -> None:
@@ -139,6 +204,7 @@ def install_and_start_ace() -> None:
     if SERVER_PROCESS and SERVER_PROCESS.poll() is None:
         return
 
+    gpu_memory_preflight()
     repo_dir = pathlib.Path("/kaggle/temp/ACE-Step-1.5")
     if not repo_dir.exists():
         log("Cloning ACE-Step 1.5")
@@ -515,6 +581,14 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
     language = str(request_data.get("language", "he"))[:8]
     base_prompt = str(previous.get("prompt") or request_data.get("prompt") or "")[:4000]
     lyrics = str(previous.get("lyrics") or request_data.get("lyrics") or "")[:12000]
+    style = str(request_data.get("style") or "")[:500]
+    instructions = str(request_data.get("instructions") or "")[:2000]
+    prompt_parts = [base_prompt] if base_prompt else []
+    if style:
+        prompt_parts.append("Requested musical style: " + style)
+    if instructions:
+        prompt_parts.append("Additional generation instructions: " + instructions)
+    base_prompt = "\\n\\n".join(prompt_parts)[:4000]
 
     try:
         audio_file, caption, new_lyrics, meta = generate_audio(
