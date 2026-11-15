@@ -1,0 +1,148 @@
+name: Generate music (Kaggle dispatch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      song_title:
+        description: Optional project title
+        required: false
+        default: ""
+        type: string
+      prompt:
+        description: Music description (style, mood, instruments, rhythm and structure)
+        required: true
+        type: string
+      lyrics:
+        description: Full lyrics (optional; leave empty for generated lyrics)
+        required: false
+        default: ""
+        type: string
+      duration:
+        description: Song duration
+        required: true
+        default: "180"
+        type: choice
+        options:
+          - "120"
+          - "180"
+          - "240"
+          - "300"
+      language:
+        description: Vocal language
+        required: true
+        default: he
+        type: choice
+        options:
+          - he
+          - en
+          - unknown
+          - es
+          - fr
+          - ar
+          - yi
+      style:
+        description: Additional style direction
+        required: false
+        default: ""
+        type: string
+      instructions:
+        description: Extra generation instructions
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: kaggle-music-worker
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Kaggle CLI and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -q kaggle six
+          python -c "import kaggle, six; print('Kaggle CLI dependencies OK')"
+          kaggle --help > /dev/null
+          echo "Kaggle CLI is ready"
+
+      - name: Push worker and queue the requested song
+        id: push
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          IN_CREATE_REQUEST: "true"
+          IN_SONG_TITLE: ${{ inputs.song_title }}
+          IN_PROMPT: ${{ inputs.prompt }}
+          IN_LYRICS: ${{ inputs.lyrics }}
+          IN_DURATION: ${{ inputs.duration }}
+          IN_LANGUAGE: ${{ inputs.language }}
+          IN_STYLE: ${{ inputs.style }}
+          IN_INSTRUCTIONS: ${{ inputs.instructions }}
+          IN_IDLE_MINUTES: "30"
+          IN_MODEL: "acestep-v15-turbo"
+          IN_LM_MODEL: "acestep-5Hz-lm-0.6B"
+          IN_LM_BACKEND: "pt"
+          IN_ACCELERATOR: "NvidiaTeslaT4"
+        run: python scripts/push_music_worker.py
+
+      - name: Wait for Kaggle kernel
+        if: steps.push.outputs.deployed == 'true'
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+        run: python scripts/wait_kaggle.py
+
+      - name: Download Kaggle diagnostics
+        if: always() && steps.push.outputs.ref != ''
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+        run: |
+          mkdir -p out
+          kaggle kernels output "$KERNEL_REF" -p out || true
+          find out -maxdepth 2 -type f -printf '%p (%s bytes)\\n' || true
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-music-dispatch-diagnostics
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        env:
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+          KERNEL_DEPLOYED: ${{ steps.push.outputs.deployed }}
+          REQUEST_URL: ${{ steps.push.outputs.issue_url }}
+        run: |
+          {
+            echo "## Kaggle Music Studio — dispatch generation"
+            echo
+            echo "Request: ${REQUEST_URL:-not created}"
+            echo "Kernel: ${KERNEL_REF:-not created}"
+            echo "Pushed: ${KERNEL_DEPLOYED:-false}"
+            echo
+            echo "Hardware profile: one Tesla T4 (15 GB class), Turbo DiT + 0.6B LM, PyTorch backend, batch size 1."
+            echo "The worker performs a VRAM preflight before downloading/loading model weights."
+          } >> "$GITHUB_STEP_SUMMARY"
