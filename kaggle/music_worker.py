@@ -199,6 +199,74 @@ def gpu_memory_preflight() -> None:
         )
 
 
+def patch_ace_step_cuda_dtype(repo_dir: pathlib.Path) -> None:
+    """Make ACE-Step honor ACESTEP_DTYPE on CUDA, including pre-Ampere Tesla T4."""
+    target = repo_dir / "acestep" / "core" / "generation" / "handler" / "init_service_orchestrator.py"
+    if not target.is_file():
+        raise RuntimeError(f"ACE-Step dtype source file not found: {target}")
+
+    source = target.read_text(encoding="utf-8")
+    patch_marker = "# MUSIC_STUDIO_CUDA_DTYPE_OVERRIDE"
+    if patch_marker in source:
+        log("ACE-Step CUDA dtype override is already installed.")
+        return
+
+    old_block = '''            elif resolved_device == "cuda":
+                if gpu_config.cuda_supports_bfloat16():
+                    self.dtype = torch.bfloat16
+                else:
+                    self.dtype = torch.float16
+                    logger.info(
+                        "[initialize_service] Pre-Ampere CUDA detected: "
+                        "using float16 instead of bfloat16."
+                    )
+'''
+    new_block = '''            elif resolved_device == "cuda":
+                # MUSIC_STUDIO_CUDA_DTYPE_OVERRIDE
+                requested_dtype = os.environ.get("ACESTEP_DTYPE", "").strip().lower()
+                cuda_dtype_map = {
+                    "float32": torch.float32,
+                    "float16": torch.float16,
+                    "bfloat16": torch.bfloat16,
+                }
+                if requested_dtype:
+                    selected_dtype = cuda_dtype_map.get(requested_dtype)
+                    if selected_dtype is None:
+                        raise ValueError(
+                            f"Unsupported ACESTEP_DTYPE={requested_dtype!r}; "
+                            "choose float32, float16 or bfloat16."
+                        )
+                    if selected_dtype == torch.bfloat16 and not gpu_config.cuda_supports_bfloat16():
+                        raise ValueError(
+                            "ACESTEP_DTYPE=bfloat16 was requested, but this CUDA GPU "
+                            "does not support native bfloat16."
+                        )
+                    self.dtype = selected_dtype
+                    logger.info(
+                        f"[initialize_service] CUDA dtype explicitly selected by "
+                        f"ACESTEP_DTYPE={requested_dtype}: using {self.dtype}."
+                    )
+                elif gpu_config.cuda_supports_bfloat16():
+                    self.dtype = torch.bfloat16
+                else:
+                    self.dtype = torch.float16
+                    logger.info(
+                        "[initialize_service] Pre-Ampere CUDA detected: "
+                        "using float16 instead of bfloat16."
+                    )
+'''
+    if old_block not in source:
+        raise RuntimeError(
+            "ACE-Step dtype selection block did not match the reviewed upstream source; "
+            "refusing to apply a potentially unsafe patch. Check the upstream version."
+        )
+    patched = source.replace(old_block, new_block, 1)
+    compile(patched, str(target), "exec")
+    target.write_text(patched, encoding="utf-8")
+    log("Patched ACE-Step CUDA dtype selection; ACESTEP_DTYPE=float32 will now be honored.")
+    log("ACE-Step dtype patch syntax check passed.")
+
+
 def install_and_start_ace() -> None:
     global SERVER_PROCESS
     if SERVER_PROCESS and SERVER_PROCESS.poll() is None:
@@ -212,6 +280,9 @@ def install_and_start_ace() -> None:
             ["git", "clone", "--depth", "1", "https://github.com/ACE-Step/ACE-Step-1.5.git", str(repo_dir)],
             check=True,
         )
+
+    # Patch the upstream dtype selector before uv sync installs the local ACE-Step source.
+    patch_ace_step_cuda_dtype(repo_dir)
 
     log("Installing ACE-Step dependencies; first start downloads the model weights")
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "uv"], check=True)
