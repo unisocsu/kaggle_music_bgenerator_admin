@@ -588,7 +588,7 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
         prompt_parts.append("Requested musical style: " + style)
     if instructions:
         prompt_parts.append("Additional generation instructions: " + instructions)
-    base_prompt = "\\n\\n".join(prompt_parts)[:4000]
+    base_prompt = "\n\n".join(prompt_parts)[:4000]
 
     try:
         audio_file, caption, new_lyrics, meta = generate_audio(
