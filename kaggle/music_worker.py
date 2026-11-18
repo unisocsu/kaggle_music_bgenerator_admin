@@ -710,7 +710,7 @@ def process_issue(issue: dict[str, Any]) -> bool:
         feedback = body.split(FEEDBACK_MARKER, 1)[1].strip()
         if not feedback:
             post_comment(issue_number, f"{ASSISTANT_MARKER}\nכתוב בבקשה מה תרצה לשפר.\n<!--music-feedback-result:{comment_id}-->")
-            return True
+            return False
         set_progress(issue_number, "התקבל משוב לגרסה חדשה",
                      "מודל השפה מתאים את תיאור המוזיקה והמילים למשוב שלך.")
         handle_generation(issue, request_data, feedback, comment_id, latest)
@@ -741,7 +741,8 @@ def main() -> None:
                     did_work = True
                     break
             if did_work:
-                continue
+                log("Generation request finished; shutting down ACE-Step and ending the Kaggle worker.")
+                break
             idle_seconds = time.time() - LAST_SONG_CREATED
             if idle_seconds >= idle_minutes * 60:
                 log(f"No successfully published song for {idle_minutes} minutes; stopping the worker.")
