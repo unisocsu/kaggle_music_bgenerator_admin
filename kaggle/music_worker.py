@@ -728,7 +728,7 @@ def main() -> None:
     if not GH_TOKEN or not GH_REPO or not GH_OWNER:
         raise SystemExit("Missing GitHub worker credentials.")
     idle_minutes = max(5, min(120, int(JOB.get("idle_minutes", 30))))
-    max_runtime = max(60, min(20, int(JOB.get("max_runtime_minutes", 20)))) * 60
+    max_runtime = max(1, min(20, int(JOB.get("max_runtime_minutes", 20)))) * 60
     start = time.time()
     WORKER_DEADLINE = start + max_runtime
     LAST_SONG_CREATED = start
