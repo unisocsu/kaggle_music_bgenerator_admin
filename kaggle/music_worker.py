@@ -43,6 +43,7 @@ HTTP.headers.update(GH_HEADERS)
 PROGRESS_IDS: dict[int, int] = {}
 LAST_SONG_CREATED = time.time()
 SERVER_PROCESS: subprocess.Popen | None = None
+WORKER_DEADLINE = 0.0
 
 
 def log(message: str) -> None:
@@ -328,7 +329,7 @@ def install_and_start_ace() -> None:
     # First-time checkpoint downloads and eager GPU initialization can take
     # several minutes. Do not treat HTTP 200 alone as readiness: ACE-Step's
     # health route is also available while lazy loading is enabled.
-    deadline = time.time() + 30 * 60
+    deadline = min(time.time() + 30 * 60, WORKER_DEADLINE) if WORKER_DEADLINE else time.time() + 30 * 60
     last_status_log = 0.0
     while time.time() < deadline:
         if SERVER_PROCESS.poll() is not None:
@@ -364,13 +365,16 @@ def install_and_start_ace() -> None:
         time.sleep(6)
     tail = subprocess.getoutput(f"tail -n 120 {OUT / 'acestep-server.log'}")
     raise RuntimeError(
-        "ACE-Step models did not finish loading within 30 minutes. "
+        "ACE-Step models did not finish loading before the 20-minute worker deadline. "
         "Last server output:\n" + tail[-7000:]
     )
 
 
 def ace_post(path: str, payload: dict[str, Any], timeout: int = 3600) -> Any:
-    response = requests.post(ACE_URL + path, json=payload, timeout=(15, timeout))
+    remaining = max(1.0, WORKER_DEADLINE - time.time()) if WORKER_DEADLINE else float(timeout)
+    request_timeout = max(1, min(timeout, int(remaining)))
+    connect_timeout = max(1, min(15, int(remaining)))
+    response = requests.post(ACE_URL + path, json=payload, timeout=(connect_timeout, request_timeout))
     response.raise_for_status()
     result = response.json()
     if result.get("error"):
@@ -491,7 +495,8 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
                  "המשימה התקבלה ב־ACE-Step. הסטטוס נבדק מול תור היצירה של המודל.")
     task_result: dict[str, Any] = {}
     last_update = 0.0
-    deadline = time.time() + max(45 * 60, duration * 90)
+    song_deadline = time.time() + max(45 * 60, duration * 90)
+    deadline = min(song_deadline, WORKER_DEADLINE) if WORKER_DEADLINE else song_deadline
     while time.time() < deadline:
         query = ace_post("/query_result", {"task_id_list": [task_id]}, timeout=60)
         entries = query if isinstance(query, list) else query.get("data", []) if isinstance(query, dict) else []
@@ -513,7 +518,7 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
             set_progress(issue_number, "יוצר את השיר",
                          "המודל עדיין עובד. עדכון זה מבוסס על סטטוס המשימה, לא על אחוז משוער.")
             last_update = time.time()
-        time.sleep(8)
+        time.sleep(min(8, max(0.1, deadline - time.time())))
     else:
         raise TimeoutError("ACE-Step generation exceeded the per-song timeout.")
 
@@ -719,16 +724,17 @@ def process_issue(issue: dict[str, Any]) -> bool:
 
 
 def main() -> None:
-    global LAST_SONG_CREATED
+    global LAST_SONG_CREATED, WORKER_DEADLINE
     if not GH_TOKEN or not GH_REPO or not GH_OWNER:
         raise SystemExit("Missing GitHub worker credentials.")
     idle_minutes = max(5, min(120, int(JOB.get("idle_minutes", 30))))
-    max_runtime = float(JOB.get("max_hours", 5.2)) * 3600
+    max_runtime = max(60, min(20, int(JOB.get("max_runtime_minutes", 20)))) * 60
     start = time.time()
+    WORKER_DEADLINE = start + max_runtime
     LAST_SONG_CREATED = start
-    log(f"Worker started for {GH_REPO}; it stays warm until {idle_minutes} minutes pass without a successfully published song.")
+    log(f"Worker started for {GH_REPO}; hard lifetime limit is 20 minutes from startup, including model loading and generation.")
     try:
-        while time.time() - start < max_runtime:
+        while time.time() < WORKER_DEADLINE:
             issues = list_music_issues()
             if issues and (SERVER_PROCESS is None or SERVER_PROCESS.poll() is not None):
                 for issue in issues:
@@ -742,6 +748,9 @@ def main() -> None:
                     break
             if did_work:
                 log("Generation request finished; shutting down ACE-Step and ending the Kaggle worker.")
+                break
+            if time.time() >= WORKER_DEADLINE:
+                log("The 20-minute worker lifetime limit was reached; stopping ACE-Step.")
                 break
             idle_seconds = time.time() - LAST_SONG_CREATED
             if idle_seconds >= idle_minutes * 60:
