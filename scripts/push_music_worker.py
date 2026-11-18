@@ -194,7 +194,7 @@ def main() -> None:
         "model": os.getenv("IN_MODEL", "acestep-v15-turbo"),
         "lm_model": os.getenv("IN_LM_MODEL", "acestep-5Hz-lm-0.6B"),
         "lm_backend": os.getenv("IN_LM_BACKEND", "pt"),
-        "max_hours": 5.2,
+        "max_runtime_minutes": 20,
         "run_id": os.getenv("GITHUB_RUN_ID", str(int(time.time()))),
     }
 
