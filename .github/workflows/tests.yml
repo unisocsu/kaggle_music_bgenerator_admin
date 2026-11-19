@@ -22,6 +22,8 @@ jobs:
           node-version: "22"
       - name: Install test dependencies
         run: python -m pip install -q requests
+      - name: Install test dependencies
+        run: python -m pip install -q requests
       - name: Python syntax
         run: python -m compileall -q scripts kaggle tests
       - name: Extract browser JavaScript
