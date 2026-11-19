@@ -82,7 +82,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           IN_IDLE_MINUTES: ${{ inputs.idle_minutes }}
           IN_MAX_RUNTIME_MINUTES: ${{ inputs.max_runtime_minutes || '90' }}
-          IN_MAX_RUNTIME_MINUTES: ${{ inputs.max_runtime_minutes || '90' }}
           IN_MODEL: ${{ inputs.model }}
           IN_LM_MODEL: ${{ inputs.lm_model }}
           IN_LM_BACKEND: ${{ inputs.lm_backend }}
