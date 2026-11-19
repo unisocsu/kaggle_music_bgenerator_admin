@@ -99,6 +99,7 @@ jobs:
           IN_STYLE: ${{ inputs.style }}
           IN_INSTRUCTIONS: ${{ inputs.instructions }}
           IN_IDLE_MINUTES: "30"
+          IN_MAX_RUNTIME_MINUTES: "90"
           IN_MODEL: "acestep-v15-turbo"
           IN_LM_MODEL: "acestep-5Hz-lm-0.6B"
           IN_LM_BACKEND: "pt"
