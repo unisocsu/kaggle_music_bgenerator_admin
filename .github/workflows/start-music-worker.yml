@@ -8,6 +8,11 @@ on:
         required: true
         default: "30"
         type: string
+      max_runtime_minutes:
+        description: Hard limit for the whole worker lifetime in minutes (model loading included)
+        required: false
+        default: "90"
+        type: string
       model:
         description: ACE-Step DiT model
         required: true
@@ -76,6 +81,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           IN_IDLE_MINUTES: ${{ inputs.idle_minutes }}
+          IN_MAX_RUNTIME_MINUTES: ${{ inputs.max_runtime_minutes || '90' }}
           IN_MODEL: ${{ inputs.model }}
           IN_LM_MODEL: ${{ inputs.lm_model }}
           IN_LM_BACKEND: ${{ inputs.lm_backend }}
