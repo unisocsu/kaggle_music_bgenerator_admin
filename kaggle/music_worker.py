@@ -18,7 +18,7 @@ from typing import Any
 import requests
 
 JOB = globals().get("JOB", {})
-OUT = pathlib.Path("/kaggle/working/music-studio")
+OUT = pathlib.Path(os.environ.get("MUSIC_STUDIO_OUT", "/kaggle/working/music-studio"))
 OUT.mkdir(parents=True, exist_ok=True)
 
 GH_API = "https://api.github.com"
@@ -41,9 +41,18 @@ REQUEST_MARKER = "<!--music-request-->"
 HTTP = requests.Session()
 HTTP.headers.update(GH_HEADERS)
 PROGRESS_IDS: dict[int, int] = {}
-LAST_SONG_CREATED = time.time()
+LAST_ACTIVITY = time.time()
 SERVER_PROCESS: subprocess.Popen | None = None
 WORKER_DEADLINE = 0.0
+
+DEFAULT_MAX_RUNTIME_MINUTES = 90
+POLL_SECONDS = 10
+MIN_TASK_SECONDS = 6 * 60  # do not start a new song with less time than this left
+ISSUES_ETAG = ""
+ISSUES_CACHE: list[dict[str, Any]] = []
+SEEN: dict[int, tuple[Any, Any]] = {}
+ACKED: set[tuple[int, int]] = set()
+TOUCHED: set[int] = set()
 
 
 def log(message: str) -> None:
@@ -64,7 +73,14 @@ def gh_json(method: str, path: str, **kwargs: Any) -> Any:
 
 
 def issue_comments(issue_number: int) -> list[dict[str, Any]]:
-    return gh_json("GET", f"/repos/{GH_REPO}/issues/{issue_number}/comments?per_page=100")
+    """All comments of an issue, oldest first (paginated, so long projects keep working)."""
+    comments: list[dict[str, Any]] = []
+    for page in range(1, 11):
+        chunk = gh_json("GET", f"/repos/{GH_REPO}/issues/{issue_number}/comments?per_page=100&page={page}")
+        comments.extend(chunk)
+        if len(chunk) < 100:
+            break
+    return comments
 
 
 def post_comment(issue_number: int, body: str) -> dict[str, Any]:
@@ -127,12 +143,21 @@ def done_for_feedback(comments: list[dict[str, Any]], comment_id: int) -> bool:
 
 
 def list_music_issues() -> list[dict[str, Any]]:
-    issues = gh_json(
-        "GET",
-        f"/repos/{GH_REPO}/issues?state=open&labels=music-request&per_page=100&sort=created&direction=asc",
+    """Open music-request issues. Uses an ETag so unchanged polls return 304 (free of rate limit)."""
+    global ISSUES_ETAG, ISSUES_CACHE
+    headers = {"If-None-Match": ISSUES_ETAG} if ISSUES_ETAG else {}
+    response = HTTP.get(
+        f"{GH_API}/repos/{GH_REPO}/issues?state=open&labels=music-request&per_page=100&sort=created&direction=asc",
+        headers=headers,
+        timeout=(15, 90),
     )
-    return [
-        item for item in issues
+    if response.status_code == 304:
+        return ISSUES_CACHE
+    if response.status_code >= 400:
+        raise RuntimeError(f"GitHub API GET issues: HTTP {response.status_code}: {response.text[:800]}")
+    ISSUES_ETAG = response.headers.get("ETag", "")
+    ISSUES_CACHE = [
+        item for item in response.json()
         if "pull_request" not in item
         and (
             item.get("user", {}).get("login") == GH_OWNER
@@ -142,6 +167,7 @@ def list_music_issues() -> list[dict[str, Any]]:
             )
         )
     ]
+    return ISSUES_CACHE
 
 
 def gpu_memory_preflight() -> None:
@@ -365,7 +391,7 @@ def install_and_start_ace() -> None:
         time.sleep(6)
     tail = subprocess.getoutput(f"tail -n 120 {OUT / 'acestep-server.log'}")
     raise RuntimeError(
-        "ACE-Step models did not finish loading before the 20-minute worker deadline. "
+        "ACE-Step models did not finish loading before the worker runtime limit. "
         "Last server output:\n" + tail[-7000:]
     )
 
@@ -649,7 +675,7 @@ def publish_result(issue_number: int, version: int, caption: str, lyrics: str,
 
 def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedback: str = "",
                       feedback_id: int | None = None, previous: dict[str, Any] | None = None) -> None:
-    global LAST_SONG_CREATED
+    global LAST_ACTIVITY
     issue_number = int(issue["number"])
     previous = previous or {}
     version = int(previous.get("version", 0)) + 1
@@ -671,7 +697,7 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
             issue_number, base_prompt, lyrics, duration, language, version, feedback
         )
         links = publish_version(issue_number, version, audio_file, caption, new_lyrics, meta, feedback)
-        LAST_SONG_CREATED = time.time()
+        LAST_ACTIVITY = time.time()
         publish_result(issue_number, version, caption, new_lyrics, meta, links, feedback_id)
         set_progress(issue_number, f"גרסה {version} פורסמה בהצלחה",
                      f"[ZIP]({links['zip_url']}) · [MP3]({links['mp3_url']}) · [Release]({links['release_url']})")
@@ -691,73 +717,162 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
                      f"{meta_marker}\n{marker}\n{BOT_MARKER}")
 
 
-def process_issue(issue: dict[str, Any]) -> bool:
-    issue_number = int(issue["number"])
+def find_task(issue: dict[str, Any], comments: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the next piece of work for an issue, or None. Does not generate anything."""
     request_data = parse_request(issue)
     if not request_data:
-        return False
-    comments = issue_comments(issue_number)
+        return None
+    issue_number = int(issue["number"])
 
     if not any(STARTED_MARKER in (c.get("body") or "") for c in comments):
-        set_progress(issue_number, "בקשת מוזיקה התקבלה", "מכין את סביבת היצירה.")
-        handle_generation(issue, request_data)
-        return True
+        return {"issue": issue, "request": request_data, "feedback": "", "feedback_id": None, "previous": None}
 
     latest = latest_assistant_meta(comments)
     if not latest:
-        return False
+        return None
     for comment in comments:
         author = comment.get("user", {}).get("login")
         body = comment.get("body") or ""
         comment_id = int(comment.get("id", 0))
         if author != GH_OWNER or FEEDBACK_MARKER not in body or done_for_feedback(comments, comment_id):
             continue
-        feedback = body.split(FEEDBACK_MARKER, 1)[1].strip()
+        feedback = body.split(FEEDBACK_MARKER, 1)[1].replace(BOT_MARKER, "").strip()
         if not feedback:
-            post_comment(issue_number, f"{ASSISTANT_MARKER}\nכתוב בבקשה מה תרצה לשפר.\n<!--music-feedback-result:{comment_id}-->")
-            return False
-        set_progress(issue_number, "התקבל משוב לגרסה חדשה",
-                     "מודל השפה מתאים את תיאור המוזיקה והמילים למשוב שלך.")
-        handle_generation(issue, request_data, feedback, comment_id, latest)
-        return True
-    return False
+            post_comment(issue_number,
+                         f"{ASSISTANT_MARKER}\nכתוב בבקשה מה תרצה לשפר.\n"
+                         f"<!--music-feedback-result:{comment_id}-->\n{BOT_MARKER}")
+            continue
+        return {"issue": issue, "request": request_data, "feedback": feedback,
+                "feedback_id": comment_id, "previous": latest}
+    return None
+
+
+def next_task(issues: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Inspect only issues that changed since the last look, to stay far below GitHub rate limits."""
+    for issue in issues:
+        number = int(issue["number"])
+        signature = (issue.get("updated_at"), issue.get("comments"))
+        if SEEN.get(number) == signature:
+            continue
+        task = find_task(issue, issue_comments(number))
+        if task:
+            return task
+        SEEN[number] = signature
+    return None
+
+
+def acknowledge(task: dict[str, Any], note: str) -> None:
+    """Tell the user right away that the request was seen (once per request/feedback)."""
+    number = int(task["issue"]["number"])
+    key = (number, int(task["feedback_id"] or 0))
+    if key in ACKED:
+        return
+    ACKED.add(key)
+    TOUCHED.add(number)
+    title = "התקבל משוב לגרסה חדשה" if task["feedback"] else "בקשת מוזיקה התקבלה"
+    try:
+        set_progress(number, title, note)
+    except Exception as exc:
+        log(f"Could not post acknowledgement for #{number}: {type(exc).__name__}: {exc}")
+
+
+def announce_stop(reason: str) -> None:
+    for number in sorted(TOUCHED):
+        try:
+            set_progress(
+                number,
+                "מנוע Kaggle נעצר",
+                f"{reason}\nשליחת משוב חדש מהדף תפעיל את המנוע מחדש אוטומטית (הטעינה הראשונה לוקחת כמה דקות).",
+            )
+        except Exception as exc:
+            log(f"Could not post stop notice for #{number}: {type(exc).__name__}: {exc}")
+
+
+def report_startup_failure(task: dict[str, Any], exc: Exception) -> None:
+    number = int(task["issue"]["number"])
+    log(f"ACE-Step failed to start: {type(exc).__name__}: {exc}")
+    try:
+        set_progress(
+            number,
+            "הפעלת המודלים נכשלה",
+            f"{type(exc).__name__}: {str(exc)[:900]}\n"
+            "הבקשה נשארה בתור. הפעלה מחודשת של המנוע תנסה אותה שוב.",
+        )
+    except Exception as post_exc:
+        log(f"Could not report startup failure: {post_exc}")
 
 
 def main() -> None:
-    global LAST_SONG_CREATED, WORKER_DEADLINE
+    global LAST_ACTIVITY, WORKER_DEADLINE
     if not GH_TOKEN or not GH_REPO or not GH_OWNER:
         raise SystemExit("Missing GitHub worker credentials.")
     idle_minutes = max(5, min(120, int(JOB.get("idle_minutes", 30))))
-    max_runtime = max(1, min(20, int(JOB.get("max_runtime_minutes", 20)))) * 60
+    max_minutes = max(5, min(180, int(JOB.get("max_runtime_minutes", DEFAULT_MAX_RUNTIME_MINUTES))))
     start = time.time()
-    WORKER_DEADLINE = start + max_runtime
-    LAST_SONG_CREATED = start
-    log(f"Worker started for {GH_REPO}; hard lifetime limit is 20 minutes from startup, including model loading and generation.")
+    WORKER_DEADLINE = start + max_minutes * 60
+    LAST_ACTIVITY = start
+    log(f"Worker started for {GH_REPO}; hard lifetime limit is {max_minutes} minutes from startup, "
+        f"idle stop after {idle_minutes} minutes without activity.")
+    stop_reason = "המנוע הסתיים."
+    failures = 0
     try:
-        while time.time() < WORKER_DEADLINE:
-            issues = list_music_issues()
-            if issues and (SERVER_PROCESS is None or SERVER_PROCESS.poll() is not None):
-                for issue in issues:
-                    set_progress(int(issue["number"]), "מכין סביבת יצירה", "מתקין ACE-Step וטוען את המודלים ל־GPU.")
-                install_and_start_ace()
-
-            did_work = False
-            for issue in issues:
-                if process_issue(issue):
-                    did_work = True
+        while True:
+            now = time.time()
+            if now >= WORKER_DEADLINE:
+                stop_reason = f"הגענו לתקרת הזמן של {max_minutes} דקות."
+                log(stop_reason)
+                break
+            if now - LAST_ACTIVITY >= idle_minutes * 60:
+                stop_reason = f"לא הייתה פעילות {idle_minutes} דקות."
+                log(stop_reason)
+                break
+            try:
+                issues = list_music_issues()
+                task = next_task(issues)
+                failures = 0
+            except Exception as exc:
+                failures += 1
+                log(f"GitHub polling error ({failures}/8): {type(exc).__name__}: {exc}")
+                if failures >= 8:
+                    stop_reason = "התקשורת עם GitHub נכשלה שוב ושוב."
                     break
-            if did_work:
-                log("Generation request finished; shutting down ACE-Step and ending the Kaggle worker.")
+                time.sleep(15)
+                continue
+
+            if task is None:
+                time.sleep(POLL_SECONDS)
+                continue
+
+            number = int(task["issue"]["number"])
+            ace_running = SERVER_PROCESS is not None and SERVER_PROCESS.poll() is None
+            remaining = WORKER_DEADLINE - time.time()
+            if ace_running and remaining < MIN_TASK_SECONDS:
+                stop_reason = ("לא נותר מספיק זמן ליצירת שיר נוסף לפני תקרת הזמן. "
+                               "הבקשה נשארה בתור ותטופל בהפעלה הבאה.")
+                log(stop_reason)
                 break
-            if time.time() >= WORKER_DEADLINE:
-                log("The 20-minute worker lifetime limit was reached; stopping ACE-Step.")
-                break
-            idle_seconds = time.time() - LAST_SONG_CREATED
-            if idle_seconds >= idle_minutes * 60:
-                log(f"No successfully published song for {idle_minutes} minutes; stopping the worker.")
-                break
-            time.sleep(12)
+            acknowledge(task, "הבקשה בתור." if ace_running else "הבקשה בתור. טוען את המודלים ל־GPU, זה עשוי לקחת כמה דקות.")
+
+            if not ace_running:
+                set_progress(number, "מכין סביבת יצירה", "מתקין ACE-Step וטוען את המודלים ל־GPU.")
+                try:
+                    install_and_start_ace()
+                except Exception as exc:
+                    report_startup_failure(task, exc)
+                    stop_reason = "הפעלת ACE-Step נכשלה; הבקשה נשארה בתור."
+                    break
+                LAST_ACTIVITY = time.time()
+
+            handle_generation(task["issue"], task["request"], task["feedback"],
+                              task["feedback_id"], task["previous"])
+            LAST_ACTIVITY = time.time()
+            SEEN.pop(number, None)  # re-inspect once: our own comments changed the issue
+            ACKED.discard((number, int(task["feedback_id"] or 0)))
     finally:
+        try:
+            announce_stop(stop_reason)
+        except Exception as exc:
+            log(f"Stop notice failed: {exc}")
         if SERVER_PROCESS and SERVER_PROCESS.poll() is None:
             SERVER_PROCESS.terminate()
             try:

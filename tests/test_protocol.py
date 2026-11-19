@@ -1,9 +1,17 @@
 import json
+import os
 import re
+import tempfile
 import unittest
 import zipfile
 from io import BytesIO
 
+os.environ.setdefault("MUSIC_STUDIO_OUT", tempfile.mkdtemp(prefix="music-studio-test-"))
+
+try:
+    from kaggle import music_worker as worker
+except ImportError:  # requests is not installed
+    worker = None
 from scripts.push_music_worker import inject_job
 
 
@@ -91,6 +99,66 @@ class ProtocolTests(unittest.TestCase):
             self.assertIn("prompt.txt", archive.namelist())
             self.assertIn("lyrics.txt", archive.namelist())
             self.assertIn("metadata.json", archive.namelist())
+
+
+def make_issue(number=7, owner="owner"):
+    payload = {"version": 1, "prompt": "pop", "lyrics": "", "language": "he", "duration": 120}
+    body = "req\n<!--music-request-->\n" + json.dumps(payload) + "\n<!--/music-request-->"
+    return {"number": number, "body": body, "user": {"login": owner}, "updated_at": "t1", "comments": 0}
+
+
+def assistant_comment(version=1, feedback_id=None):
+    meta = "<!--music-meta:" + json.dumps({"version": version, "prompt": "p", "lyrics": "l"}) + "-->"
+    marker = f"<!--music-feedback-result:{feedback_id}-->" if feedback_id else worker.STARTED_MARKER
+    return {"id": 100 + version, "user": {"login": "github-actions[bot]"},
+            "body": f"{worker.ASSISTANT_MARKER}\nready\n{meta}\n{marker}"}
+
+
+def feedback_comment(comment_id, text, author="owner"):
+    return {"id": comment_id, "user": {"login": author}, "body": worker.FEEDBACK_MARKER + "\n" + text}
+
+
+@unittest.skipIf(worker is None, "requests is not installed")
+class WorkerTaskTests(unittest.TestCase):
+    def setUp(self):
+        worker.GH_OWNER = "owner"
+        worker.SEEN.clear()
+
+    def test_new_request_is_a_task(self):
+        task = worker.find_task(make_issue(), [])
+        self.assertIsNotNone(task)
+        self.assertEqual(task["feedback"], "")
+        self.assertIsNone(task["previous"])
+
+    def test_finished_request_without_feedback_is_idle(self):
+        self.assertIsNone(worker.find_task(make_issue(), [assistant_comment()]))
+
+    def test_owner_feedback_becomes_task_with_previous_meta(self):
+        comments = [assistant_comment(), feedback_comment(200, "more piano")]
+        task = worker.find_task(make_issue(), comments)
+        self.assertEqual(task["feedback"], "more piano")
+        self.assertEqual(task["feedback_id"], 200)
+        self.assertEqual(task["previous"]["version"], 1)
+
+    def test_feedback_from_other_users_is_ignored(self):
+        comments = [assistant_comment(), feedback_comment(201, "hack", author="stranger")]
+        self.assertIsNone(worker.find_task(make_issue(), comments))
+
+    def test_processed_feedback_is_not_repeated(self):
+        comments = [assistant_comment(), feedback_comment(202, "x"), assistant_comment(2, 202)]
+        self.assertIsNone(worker.find_task(make_issue(), comments))
+
+    def test_next_task_skips_unchanged_issues(self):
+        issue = make_issue()
+        calls = []
+        original = worker.issue_comments
+        worker.issue_comments = lambda n: calls.append(n) or [assistant_comment()]
+        try:
+            self.assertIsNone(worker.next_task([issue]))
+            self.assertIsNone(worker.next_task([issue]))
+        finally:
+            worker.issue_comments = original
+        self.assertEqual(calls, [7])
 
 
 if __name__ == "__main__":

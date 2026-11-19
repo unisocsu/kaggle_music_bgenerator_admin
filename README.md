@@ -47,7 +47,21 @@ In GitHub → Settings → Pages, set **Source** to **GitHub Actions**. The `Dep
 
 Create a new project and enter a music description and optional lyrics. The default target is a 3-minute song, Hebrew vocal language, ACE-Step 1.5 Turbo, and the 0.6B LM for a stable first run on T4.
 
-The first Kaggle start installs ACE-Step, downloads the model checkpoints, and eagerly loads both the Turbo DiT and 0.6B language model before the worker reports ready. The readiness check verifies the loaded model names through ACE-Step's `/health` response; HTTP 200 alone is not treated as proof that the weights are loaded. Later requests in the same worker session reuse the already-loaded models. By default, the worker stays active for **30 minutes after the last successfully generated and published song**. Chat messages and progress updates do not reset this timer; a new successful song does.
+The first Kaggle start installs ACE-Step, downloads the model checkpoints, and eagerly loads both the Turbo DiT and 0.6B language model before the worker reports ready. The readiness check verifies the loaded model names through ACE-Step's `/health` response; HTTP 200 alone is not treated as proof that the weights are loaded. Later requests in the same worker session reuse the already-loaded models, so feedback versions start immediately.
+
+The worker has two limits:
+
+- **Hard limit: 90 minutes** from startup, model loading included (`max_runtime_minutes`, 5–180). A new song is not started when fewer than 6 minutes remain; the request stays queued for the next worker.
+- **Idle limit: 30 minutes** without activity (`idle_minutes`), counted from model readiness or the last processed request.
+
+When the worker stops it posts a short notice in the project, and sending feedback from the page starts it again automatically. The page shows whether a worker run is active, and it never starts a second one while one is running.
+
+### How the page and worker talk through Issues
+
+- The worker polls open `music-request` Issues with an ETag (unchanged polls cost no rate limit) and only reads the comments of issues that changed.
+- Requests and feedback are only accepted from the repository owner (or the dispatch workflow), because the repository is public.
+- The models are loaded only when there is real work. Each request gets an immediate acknowledgement, then live progress, then the result with ZIP/MP3 links.
+- If model start-up fails, the request stays in the queue and the next worker run retries it.
 
 ### Improve a previous version
 

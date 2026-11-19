@@ -239,14 +239,29 @@ async function ensureLabel(){
     catch(createError){if(!String(createError.message).includes('already_exists'))throw createError}
   }
 }
+const ACTIVE_STATES=['queued','in_progress','waiting','requested','pending'];
+async function workerIsActive(){
+  const names=['start-music-worker.yml','generate-music-dispatch.yml'];
+  for(const name of names){
+    const runs=await gh('GET',apiPath('/actions/workflows/'+name+'/runs?per_page=5'));
+    if((runs.workflow_runs||[]).some(r=>ACTIVE_STATES.includes(r.status)))return true;
+  }
+  return false;
+}
+async function refreshWorkerState(){
+  try{
+    const active=await workerIsActive();
+    setWorker(active?'מנוע Kaggle פעיל':'המנוע כבוי · יופעל אוטומטית בשליחת בקשה או משוב',active);
+    return active;
+  }catch(e){return null}
+}
 async function dispatchWorker(){
   if(!requireSettings())return;
   const now=Date.now();
   if(now-S.dispatchAt<180000){setWorker('Kaggle הופעל / בתהליך התחברות',true);return}
   setWorker('בודק את Kaggle…',false);
   try{
-    const runs=await gh('GET',apiPath('/actions/workflows/start-music-worker.yml/runs?per_page=10'));
-    const active=(runs.workflow_runs||[]).some(r=>['queued','in_progress','waiting','requested'].includes(r.status));
+    const active=await workerIsActive();
     if(active){
       setWorker('Kaggle פעיל',true);
       S.dispatchAt=now;
@@ -426,7 +441,12 @@ async function addAudioCard(parent,meta){
 async function loadConversation(){
   if(!S.active)return;
   const issueNo=S.active.number;
-  const comments=await gh('GET',apiPath('/issues/'+issueNo+'/comments?per_page=100'));
+  const comments=[];
+  for(let page=1;page<=10;page++){
+    const chunk=await gh('GET',apiPath('/issues/'+issueNo+'/comments?per_page=100&page='+page))||[];
+    comments.push(...chunk);
+    if(chunk.length<100)break;
+  }
   if(!S.active||S.active.number!==issueNo)return;
   S.comments=comments||[];
   const latestProgress=S.comments.filter(c=>(c.body||'').includes(MARK.progress)).slice(-1)[0];
@@ -513,14 +533,16 @@ $('#menu').addEventListener('click',()=>$('#sidebar').classList.toggle('open'));
 
 if(S.token){
   refreshAll().catch(e=>toast(e.message));
-  setWorker('מוכן לשליחת בקשה',false);
 }else{
   setWorker('הגדרות נדרשות',false);
 }
+let pollTick=0;
 S.pollTimer=setInterval(()=>{
   if(!S.token)return;
   loadIssues().then(()=>S.active&&loadConversation()).catch(()=>{});
+  if(pollTick++%4===0)refreshWorkerState();
 },9000);
+if(S.token)refreshWorkerState();
 </script>
 </body>
 </html>
