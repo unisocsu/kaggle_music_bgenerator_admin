@@ -75,7 +75,7 @@ form.addEventListener('submit',async e=>{
  if(!caption||!Number.isInteger(duration)||duration<0||duration>600||(duration!==0&&duration<10)){showMessage('נתונים לא תקינים','בדיקה','יש להזין Caption ומשך של 10–600 שניות, או 0 לבחירת המודל.');return}
  localStorage.setItem(TOKEN_KEY,token);tokenSaved.textContent='הטוקן נשמר במכשיר';btn.disabled=true;
  showMessage('שולח בקשה','מתחיל','יוצר Issue וממתין ל־GitHub Actions…');
- const body='## Direct ACE-Step GPU request\\n\\n**Caption**\\n\\n'+caption+'\\n\\n**Lyrics**\\n\\n'+(lyrics||'[empty]')+'\\n\\n**Duration**\\n\\n'+duration+'\\n';
+ const body='## Direct ACE-Step GPU request\n\n**Caption**\n\n'+caption+'\n\n**Lyrics**\n\n'+(lyrics||'[empty]')+'\n\n**Duration**\n\n'+duration+'\n';
  const headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28'};
  try{
   const r=await fetch('https://api.github.com/repos/'+REPO+'/issues',{method:'POST',headers,body:JSON.stringify({title:'Direct song: '+caption.slice(0,65),body})});
