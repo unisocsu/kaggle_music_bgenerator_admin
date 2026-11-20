@@ -36,6 +36,7 @@ In GitHub → Settings → Secrets and variables → Actions, add:
 
 - `KAGGLE_USERNAME`: your Kaggle username
 - `KAGGLE_API_TOKEN`: your Kaggle API token
+- `GEMINI_API_KEY`: Google AI Studio API key used by the Gemini music planner (optional; without it, the worker falls back to ACE-Step prompt formatting and a prompt-derived cover).
 
 The GitHub workflow uses its temporary `GITHUB_TOKEN` with Issues and Contents write permissions to update Issues and publish Release assets.
 
