@@ -23,7 +23,7 @@ button{border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:70
 <label for="lyrics">Lyrics — מילים (ריק = לפי התנהגות ברירת המחדל של המודל)</label>
 <textarea id="lyrics" placeholder="[Verse 1]&#10;..."></textarea>
 <label for="duration">Duration — משך בשניות</label>
-<input id="duration" type="number" min="10" max="300" value="30" required>
+<input id="duration" type="number" min="0" max="600" value="30" required>
 <button id="submit" type="submit">שלח בקשת יצירה ל־Kaggle</button>
 </form>
 <div id="status"></div>
@@ -50,7 +50,7 @@ form.addEventListener('submit',async e=>{
  const caption=document.querySelector('#caption').value.trim();
  const lyrics=document.querySelector('#lyrics').value;
  const duration=Number(document.querySelector('#duration').value);
- if(!caption||!Number.isInteger(duration)||duration<10||duration>300){show('יש להזין caption ומשך בין 10 ל־300 שניות.');return}
+ if(!caption||!Number.isInteger(duration)||(duration!==0&&(duration<10||duration>600))){show('יש להזין caption ומשך בין 10 ל־300 שניות.');return}
  btn.disabled=true;show('פותח בקשת יצירה ב־GitHub Issues…');
  const payload=JSON.stringify({caption,lyrics,duration});
  const body='<!-- kaggle-direct-song-request -->\n'+
