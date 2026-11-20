@@ -57,6 +57,12 @@ jobs:
           ISSUE: ${{ github.event.issue.number }}
         run: gh issue comment "$ISSUE" --body "🎛️ הבקשה התקבלה. GitHub Actions מכין עכשיו Kaggle Kernel פרטי עם GPU ומעביר אליו את שלושת השדות המקוריים: caption, lyrics, duration."
 
+      - name: Report preparation stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: gh issue comment "$ISSUE" --body "🧰 שלב 1/4: GitHub Actions מכין את סביבת Kaggle ומתקין את כלי ההפעלה."
+
       - name: Install Kaggle CLI
         run: |
           python -m pip install --upgrade pip
@@ -132,6 +138,7 @@ jobs:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
         run: |
           kaggle kernels push -p kaggle-job
+          gh issue comment "$ISSUE" --body "🚀 ה־Kernel נשלח ל־Kaggle. ממתין להקצאת GPU ולהתחלת ההרצה."
 
       - name: Wait for Kaggle kernel
         id: wait
@@ -141,9 +148,14 @@ jobs:
           ISSUE: ${{ github.event.issue.number }}
         run: |
           set +e
+          reported_running=false
           for i in $(seq 1 240); do
             status="$(kaggle kernels status "$KERNEL_REF" 2>&1)"
             echo "$status"
+            if [ "$reported_running" = false ] && echo "$status" | grep -qiE 'running|in progress'; then
+              gh issue comment "$ISSUE" --body "🟡 Kaggle מדווח שה־Kernel פעיל. כעת מתבצעת הכנת סביבת Python, טעינת מודלי ACE-Step ויצירת השיר. עד שההרצה תסתיים, Kaggle אינו מספק ל־Workflow דיווח נפרד שמאשר את רגע סיום טעינת המודל."
+              reported_running=true
+            fi
             if echo "$status" | grep -qiE 'complete|has completed'; then
               echo "completed=true" >> "$GITHUB_OUTPUT"
               exit 0
