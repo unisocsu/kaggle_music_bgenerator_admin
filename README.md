@@ -86,6 +86,20 @@ Open **Actions → Generate music (Kaggle dispatch) → Run workflow**. The disp
 
 The dispatch workflow deliberately pins the generation profile to **Turbo DiT + 0.6B LM + PyTorch on one Tesla T4**. This is the conservative profile for the current T4 setup. Before downloading or loading model weights, the worker checks free VRAM on `cuda:0`, estimates the float32 DiT/LM weight footprint plus a runtime reserve, and stops before loading if the free memory is insufficient. Two T4 cards are treated as separate devices; their VRAM is never added together. The estimate is a preflight guard, not a guarantee against every runtime allocation spike.
 
+## Direct Kaggle GPU generator (separate pipeline)
+
+A second, isolated generator is available at the GitHub Pages path `/direct.html`.
+
+- Open `https://unisocsu.github.io/kaggle_music_bgenerator_admin/direct.html` (after Pages deploys).
+- Enter a GitHub fine-grained token for this repository with Issues read/write and Metadata read.
+- Submit only `caption`, `lyrics`, and `duration`. The page creates an Issue containing the exact values.
+- `.github/workflows/direct-kaggle-song.yml` listens for those marked Issues, creates a **private Kaggle notebook with GPU enabled**, pushes it with the Kaggle CLI, waits for completion, downloads the MP3, publishes a separate Release, and comments the result back on the same Issue.
+- The page polls that Issue's comments and displays the progress/result updates.
+
+This path is intentionally separate from the existing Music Studio worker and does not call Gemini or the existing prompt planner. It uses ACE-Step 1.5 Turbo with its 0.6B language model. The existing `KAGGLE_USERNAME` and `KAGGLE_API_TOKEN` Actions secrets are reused; no new secrets are required. The GitHub token is entered in the page and is not stored in the repository.
+
+The direct path currently creates a fresh Kaggle kernel for each Issue, so model setup/checkpoint downloads may repeat. Kaggle GPU availability and execution quotas remain subject to Kaggle.
+
 ## Runtime notes
 
 - Kaggle GPU availability and session limits are controlled by Kaggle and can change.
