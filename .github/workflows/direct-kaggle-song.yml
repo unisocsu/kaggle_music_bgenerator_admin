@@ -65,13 +65,14 @@ jobs:
       - name: Create private Kaggle notebook
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           ISSUE: ${{ github.event.issue.number }}
           CAPTION: ${{ steps.request.outputs.caption }}
           LYRICS: ${{ steps.request.outputs.lyrics }}
           DURATION: ${{ steps.request.outputs.duration }}
         run: |
           test -n "$KAGGLE_USERNAME" || (echo "Missing KAGGLE_USERNAME secret" && exit 1)
-          test -n "${{ secrets.KAGGLE_API_TOKEN }}" || (echo "Missing KAGGLE_API_TOKEN secret" && exit 1)
+          test -n "$KAGGLE_API_TOKEN" || (echo "Missing KAGGLE_API_TOKEN secret" && exit 1)
           mkdir -p kaggle-job
           export KERNEL_SLUG="direct-song-issue-$ISSUE"
           python - <<'PY'
@@ -173,5 +174,5 @@ jobs:
           FILE="$(find result -type f -iname '*.mp3' -print -quit)"
           TAG="direct-song-issue-$ISSUE"
           gh release create "$TAG" "$FILE#Generated song (MP3)" --title "Direct song #$ISSUE" --notes "Generated on Kaggle GPU with ACE-Step 1.5. Request: #$ISSUE"
-          URL="$(gh release view "$TAG" --json assets --jq '.assets[0].url')"
+          URL="$(gh release view "$TAG" --json assets --jq '.assets[0].browser_download_url')"
           gh issue comment "$ISSUE" --body "🎵 **היצירה הסתיימה בהצלחה ב־Kaggle GPU.**\n\n[הורדת השיר (MP3)]($URL)\n\nהקובץ פורסם ב־GitHub Release נפרד לבקשה הזו."
