@@ -33,6 +33,16 @@ button{border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:70
 const REPO='unisocsu/kaggle_music_bgenerator_admin';
 const form=document.querySelector('#form'),status=document.querySelector('#status'),btn=document.querySelector('#submit');\ndocument.querySelector('#token').value=sessionStorage.getItem('direct_song_token')||'';\nlet pollHandle=null;\nasync function pollIssue(token,number){\n try{const r=await fetch('https://api.github.com/repos/'+REPO+'/issues/'+number+'/comments',{headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json'}});const comments=await r.json();if(!r.ok)throw new Error(comments.message||r.status);const lines=comments.map(x=>x.body).filter(Boolean);const last=lines.slice(-5).join('\n\n');if(last){status.innerHTML='Issue #'+number+' — עדכונים אחרונים:<pre style="white-space:pre-wrap;direction:auto">'+last.replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))+'</pre><a target="_blank" rel="noopener" href="https://github.com/'+REPO+'/issues/'+number+'">פתיחת Issue</a>';} }catch(e){console.warn(e)}\n}
 function show(s){status.style.display='block';status.textContent=s}
+let pollHandle=null;
+async function pollIssue(token,number){
+ try{
+  const r=await fetch('https://api.github.com/repos/'+REPO+'/issues/'+number+'/comments',{headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json'}});
+  const comments=await r.json();if(!r.ok)throw new Error(comments.message||r.status);
+  const txt=comments.map(x=>x.body||'').slice(-6).join('\\n\\n');
+  const safe=txt.replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+  status.innerHTML='<b>סטטוס Issue #'+number+'</b><pre style="white-space:pre-wrap;direction:auto">'+safe+'</pre><a target="_blank" rel="noopener" href="https://github.com/'+REPO+'/issues/'+number+'">פתיחת Issue</a>';
+ }catch(e){console.warn(e)}
+}
 form.addEventListener('submit',async e=>{
  e.preventDefault();
  const token=prompt('GitHub token with Issues read/write and Metadata read');
@@ -55,8 +65,9 @@ form.addEventListener('submit',async e=>{
    body:JSON.stringify({title:'Direct song: '+caption.slice(0,65),body})
   });
   const data=await r.json();if(!r.ok)throw new Error(data.message||('GitHub HTTP '+r.status));
-  show('הבקשה נפתחה בהצלחה.\nIssue #'+data.number+'\nה־Workflow יפעיל את Kaggle GPU ויעדכן את ה־Issue בהתקדמות ובקישור לתוצאה.\n\n'+data.html_url);
-  status.innerHTML='הבקשה נפתחה בהצלחה: <a target="_blank" rel="noopener" href="'+data.html_url+'">מעקב אחר Issue #'+data.number+'</a>';
+  show('הבקשה נפתחה. ממתין לעדכונים מה־Workflow ומה־Kaggle GPU…');
+  status.innerHTML='נפתח <a target="_blank" rel="noopener" href="'+data.html_url+'">Issue #'+data.number+'</a>. העדכונים יופיעו כאן.';
+  if(pollHandle)clearInterval(pollHandle);await pollIssue(token,data.number);pollHandle=setInterval(()=>pollIssue(token,data.number),20000);
  }catch(err){show('שגיאה: '+err.message)}finally{btn.disabled=false}
 });
 </script></body></html>
