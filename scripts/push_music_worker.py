@@ -188,6 +188,9 @@ def main() -> None:
 
     job = {
         "gh_token": gh_token,
+        "gemini_api_key": os.getenv("IN_GEMINI_API_KEY", ""),
+        "gemini_model": os.getenv("IN_GEMINI_MODEL", "gemini-3.8-flash"),
+        "image_model": os.getenv("IN_IMAGE_MODEL", "stabilityai/sd-turbo"),
         "gh_repo": repo,
         "owner": repo.split("/", 1)[0],
         "idle_minutes": max(5, min(120, int(os.getenv("IN_IDLE_MINUTES", "30")))),
