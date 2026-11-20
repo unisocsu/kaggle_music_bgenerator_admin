@@ -21,7 +21,7 @@ small{color:var(--muted)}@media(max-width:600px){main{margin:0;padding:12px}.pan
 <div class="tags"><span class="tag">Kaggle GPU</span><span class="tag">ACE-Step 1.5</span><span class="tag">Live progress</span></div>
 <form id="form">
 <label for="token">GitHub token</label><input id="token" type="password" autocomplete="off" placeholder="github_pat_..." required>\n<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px"><small id="tokenSaved" aria-live="polite">הטוקן יישמר אוטומטית במכשיר</small><button id="clearToken" type="button" style="margin:0;padding:7px 11px;background:#34415d;font-size:12px">מחק טוקן שמור</button></div>
-<small>הטוקן נשמר במכשיר הזה גם אחרי סגירת הדפדפן. במחשב משותף מומלץ לא לשמור אותו. נדרשות הרשאות Issues: Read and write ו־Metadata: Read.</small>
+<small>הטוקן נשמר במכשיר הזה גם אחרי סגירת הדפדפן. במחשב משותף מומלץ לא לשמור אותו. נדרשות הרשאות Issues: Read and write, Actions: Read and write ו־Metadata: Read.</small>
 <label for="caption">Caption — תיאור הסגנון וההפקה</label>
 <textarea id="caption" required>Upbeat acoustic folk with warm guitar and gentle drums</textarea>
 <label for="lyrics">Lyrics — מילים</label>
@@ -75,13 +75,16 @@ form.addEventListener('submit',async e=>{
  if(!caption||!Number.isInteger(duration)||duration<0||duration>600||(duration!==0&&duration<10)){showMessage('נתונים לא תקינים','בדיקה','יש להזין Caption ומשך של 10–600 שניות, או 0 לבחירת המודל.');return}
  localStorage.setItem(TOKEN_KEY,token);tokenSaved.textContent='הטוקן נשמר במכשיר';btn.disabled=true;
  showMessage('שולח בקשה','מתחיל','יוצר Issue וממתין ל־GitHub Actions…');
- const payload=JSON.stringify({caption,lyrics,duration});
- const body='<!-- kaggle-direct-song-request -->\n<!-- payload:start -->\n'+payload+'\n<!-- payload:end -->\n\n## Direct ACE-Step GPU request\n\n**Caption**\n\n'+caption+'\n\n**Lyrics**\n\n'+(lyrics||'[empty]')+'\n\n**Duration**\n\n'+duration+'\n';
+ const body='## Direct ACE-Step GPU request\\n\\n**Caption**\\n\\n'+caption+'\\n\\n**Lyrics**\\n\\n'+(lyrics||'[empty]')+'\\n\\n**Duration**\\n\\n'+duration+'\\n';
+ const headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28'};
  try{
-  const r=await fetch('https://api.github.com/repos/'+REPO+'/issues',{method:'POST',headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28'},body:JSON.stringify({title:'Direct song: '+caption.slice(0,65),body})});
-  const data=await r.json();if(!r.ok)throw new Error(data.message||('GitHub HTTP '+r.status));
-  showMessage('בקשה נפתחה','נשלח','הבקשה נפתחה. מציג עדכוני התקדמות מה־Workflow ומה־Kaggle…');
+  const r=await fetch('https://api.github.com/repos/'+REPO+'/issues',{method:'POST',headers,body:JSON.stringify({title:'Direct song: '+caption.slice(0,65),body})});
+  const data=await r.json();if(!r.ok)throw new Error(data.message||('GitHub Issues HTTP '+r.status));
+  showMessage('מפעיל Workflow','Dispatch','הבקשה נשמרה. שולח עכשיו workflow_dispatch ישירות ל־GitHub Actions…');
+  const dispatch=await fetch('https://api.github.com/repos/'+REPO+'/actions/workflows/direct-kaggle-song.yml/dispatches',{method:'POST',headers,body:JSON.stringify({ref:'main',inputs:{caption,lyrics,duration:String(duration),issue_number:String(data.number)}})});
+  if(!dispatch.ok){let detail='';try{const x=await dispatch.json();detail=x.message||JSON.stringify(x)}catch{}throw new Error('GitHub Actions dispatch HTTP '+dispatch.status+(detail?': '+detail:''));}
+  showMessage('ה־Workflow הופעל','נשלח','GitHub אישר את בקשת workflow_dispatch. כעת מוצגים עדכוני ההתקדמות ב־Issue…');
   await pollIssue(token,data.number);if(pollHandle)clearInterval(pollHandle);pollHandle=setInterval(()=>pollIssue(token,data.number),8000);
- }catch(err){showMessage('שגיאה בשליחת הבקשה','נכשל',err.message)}finally{btn.disabled=false}
+}catch(err){showMessage('שגיאה בשליחת הבקשה','נכשל',err.message)}finally{btn.disabled=false}
 });
 </script></body></html>
