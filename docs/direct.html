@@ -20,8 +20,8 @@ small{color:var(--muted)}@media(max-width:600px){main{margin:0;padding:12px}.pan
 <p class="muted">ממשק עצמאי: הבקשה נשלחת דרך GitHub Issues ומפעילה Kernel פרטי ב־Kaggle עם GPU. כאן תוכל לעקוב אחרי שלבי ההרצה, טעינת המודל והיצירה.</p>
 <div class="tags"><span class="tag">Kaggle GPU</span><span class="tag">ACE-Step 1.5</span><span class="tag">Live progress</span></div>
 <form id="form">
-<label for="token">GitHub token</label><input id="token" type="password" autocomplete="off" placeholder="github_pat_..." required>
-<small>הטוקן נשמר רק ב־sessionStorage של הלשונית. נדרשות הרשאות Issues: Read and write ו־Metadata: Read.</small>
+<label for="token">GitHub token</label><input id="token" type="password" autocomplete="off" placeholder="github_pat_..." required>\n<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px"><small id="tokenSaved" aria-live="polite">הטוקן יישמר אוטומטית במכשיר</small><button id="clearToken" type="button" style="margin:0;padding:7px 11px;background:#34415d;font-size:12px">מחק טוקן שמור</button></div>
+<small>הטוקן נשמר במכשיר הזה גם אחרי סגירת הדפדפן. במחשב משותף מומלץ לא לשמור אותו. נדרשות הרשאות Issues: Read and write ו־Metadata: Read.</small>
 <label for="caption">Caption — תיאור הסגנון וההפקה</label>
 <textarea id="caption" required>Upbeat acoustic folk with warm guitar and gentle drums</textarea>
 <label for="lyrics">Lyrics — מילים</label>
@@ -41,7 +41,7 @@ small{color:var(--muted)}@media(max-width:600px){main{margin:0;padding:12px}.pan
 const REPO='unisocsu/kaggle_music_bgenerator_admin';
 const form=document.querySelector('#form'),statusBox=document.querySelector('#status'),btn=document.querySelector('#submit');
 const tokenInput=document.querySelector('#token'),timeline=document.querySelector('#timeline');
-tokenInput.value=sessionStorage.getItem('direct_song_token')||'';
+const TOKEN_KEY='direct_song_token';\ntokenInput.value=localStorage.getItem(TOKEN_KEY)||'';\nconst tokenSaved=document.querySelector('#tokenSaved');\ntokenInput.addEventListener('input',()=>{const value=tokenInput.value.trim();if(value){localStorage.setItem(TOKEN_KEY,value);tokenSaved.textContent='הטוקן נשמר במכשיר';}else{localStorage.removeItem(TOKEN_KEY);tokenSaved.textContent='אין טוקן שמור';}});\ndocument.querySelector('#clearToken').addEventListener('click',()=>{localStorage.removeItem(TOKEN_KEY);tokenInput.value='';tokenSaved.textContent='הטוקן נמחק מהמכשיר';});
 let pollHandle=null,lastCommentCount=0;
 function showMessage(title,pill,message){
  statusBox.style.display='block';document.querySelector('#statusTitle').textContent=title;document.querySelector('#statusPill').textContent=pill;
@@ -73,7 +73,7 @@ form.addEventListener('submit',async e=>{
  const caption=document.querySelector('#caption').value.trim(),lyrics=document.querySelector('#lyrics').value;
  const duration=Number(document.querySelector('#duration').value);
  if(!caption||!Number.isInteger(duration)||duration<0||duration>600||(duration!==0&&duration<10)){showMessage('נתונים לא תקינים','בדיקה','יש להזין Caption ומשך של 10–600 שניות, או 0 לבחירת המודל.');return}
- sessionStorage.setItem('direct_song_token',token);btn.disabled=true;
+ localStorage.setItem(TOKEN_KEY,token);tokenSaved.textContent='הטוקן נשמר במכשיר';btn.disabled=true;
  showMessage('שולח בקשה','מתחיל','יוצר Issue וממתין ל־GitHub Actions…');
  const payload=JSON.stringify({caption,lyrics,duration});
  const body='<!-- kaggle-direct-song-request -->\n<!-- payload:start -->\n'+payload+'\n<!-- payload:end -->\n\n## Direct ACE-Step GPU request\n\n**Caption**\n\n'+caption+'\n\n**Lyrics**\n\n'+(lyrics||'[empty]')+'\n\n**Duration**\n\n'+duration+'\n';
