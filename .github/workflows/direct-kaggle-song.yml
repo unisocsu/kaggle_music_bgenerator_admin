@@ -87,43 +87,59 @@ jobs:
           lyrics = os.environ["LYRICS"]
           duration = int(os.environ["DURATION"])
           run_id = int(os.environ["RUN_ID"])
+          def markdown_cell(cell_id, text):
+              return {"cell_type":"markdown","id":cell_id,"metadata":{},"source":[text]}
+
+          def code_cell(cell_id, lines):
+              return {"cell_type":"code","id":cell_id,"execution_count":None,"metadata":{},"outputs":[],"source":lines}
+
           cells = [
-            {"cell_type":"markdown","metadata":{},"source":["# Direct ACE-Step 1.5 song generation\n","Private Kaggle GPU kernel. Request values are embedded by the GitHub Actions dispatcher.\n"]},
-            {"cell_type":"code","execution_count":None,"metadata":{},"outputs":[],"source":[
-              "!git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5.git /kaggle/working/ACE-Step-1.5\n",
-              "%cd /kaggle/working/ACE-Step-1.5\n",
-              "!pip install -q -e .\n",
-              "!pip install -q soundfile"
-            ]},
-            {"cell_type":"code","execution_count":None,"metadata":{},"outputs":[],"source":[
-              "import os, json, torch\n",
-              "from acestep.handler import AceStepHandler\n",
-              "from acestep.llm_inference import LLMHandler\n",
-              "from acestep.inference import GenerationParams, GenerationConfig, generate_music\n",
-              f"CAPTION = {caption!r}\n",
-              f"LYRICS = {lyrics!r}\n",
-              f"DURATION = {duration!r}\n",
-              f"RUN_ID = {run_id!r}\n",
-              "assert torch.cuda.is_available(), 'Kaggle GPU is not available'\n",
-              "print('GPU:', torch.cuda.get_device_name(0))\n",
-              "print('VRAM GiB:', round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2))\n",
-              "dit = AceStepHandler()\n",
-              "dit.initialize_service(project_root='/kaggle/working/ACE-Step-1.5', config_path='acestep-v15-turbo', device='cuda')\n",
-              "llm = LLMHandler()\n",
-              "llm.initialize(checkpoint_dir='/kaggle/working/ACE-Step-1.5/checkpoints', lm_model_path='acestep-5Hz-lm-0.6B', backend='pt', device='cuda')\n",
-              "params = GenerationParams(task_type='text2music', caption=CAPTION, lyrics=LYRICS, duration=float(DURATION), thinking=True, inference_steps=8, shift=3.0)\n",
-              "config = GenerationConfig(batch_size=1, audio_format='mp3')\n",
-              "os.makedirs('/kaggle/working/song-output', exist_ok=True)\n",
-              "result = generate_music(dit, llm, params, config, save_dir='/kaggle/working/song-output')\n",
-              "if not result.success: raise RuntimeError(result.error or result.status_message)\n",
-              "print('Generation status:', result.status_message)\n",
-              "for i, audio in enumerate(result.audios):\n",
-              "    src = audio['path']\n",
-              "    dst = f'/kaggle/working/song-output/song-{i+1}.mp3'\n",
-              "    if src != dst: __import__('shutil').copy2(src, dst)\n",
-              "    print('OUTPUT:', dst)\n",
+            markdown_cell("intro", "# Direct ACE-Step 1.5 song generation\\nPrivate Kaggle GPU kernel. Python 3.12 environment is prepared separately from Kaggle's system Python.\\n"),
+            code_cell("clone", [
+              "!git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5.git /kaggle/working/ACE-Step-1.5\\n",
+              "%cd /kaggle/working/ACE-Step-1.5"
+            ]),
+            code_cell("install-python312", [
+              "!curl -LsSf https://astral.sh/uv/install.sh | sh\\n",
+              "import os\\n",
+              "os.environ['PATH'] = os.path.expanduser('~/.local/bin') + ':' + os.environ['PATH']\\n",
+              "!uv python install 3.12\\n",
+              "!uv sync --python 3.12 --no-dev\\n",
+              "! .venv/bin/python -c \"import sys, torch; print('Python:', sys.version); print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('CUDA build:', torch.version.cuda); assert sys.version_info[:2] == (3, 12); assert torch.cuda.is_available(), 'CUDA is unavailable in the Python 3.12 environment'\""
+            ]),
+            code_cell("write-generation-script", [
+              "%%writefile /kaggle/working/run_generation.py\\n",
+              "import os, shutil, torch\\n",
+              "from acestep.handler import AceStepHandler\\n",
+              "from acestep.llm_inference import LLMHandler\\n",
+              "from acestep.inference import GenerationParams, GenerationConfig, generate_music\\n",
+              f"CAPTION = {caption!r}\\n",
+              f"LYRICS = {lyrics!r}\\n",
+              f"DURATION = {duration!r}\\n",
+              f"RUN_ID = {run_id!r}\\n",
+              "assert torch.cuda.is_available(), 'Kaggle GPU is not available'\\n",
+              "print('GPU:', torch.cuda.get_device_name(0))\\n",
+              "print('VRAM GiB:', round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2))\\n",
+              "dit = AceStepHandler()\\n",
+              "dit.initialize_service(project_root='/kaggle/working/ACE-Step-1.5', config_path='acestep-v15-turbo', device='cuda')\\n",
+              "llm = LLMHandler()\\n",
+              "llm.initialize(checkpoint_dir='/kaggle/working/ACE-Step-1.5/checkpoints', lm_model_path='acestep-5Hz-lm-0.6B', backend='pt', device='cuda')\\n",
+              "params = GenerationParams(task_type='text2music', caption=CAPTION, lyrics=LYRICS, duration=float(DURATION), thinking=True, inference_steps=8, shift=3.0)\\n",
+              "config = GenerationConfig(batch_size=1, audio_format='mp3')\\n",
+              "os.makedirs('/kaggle/working/song-output', exist_ok=True)\\n",
+              "result = generate_music(dit, llm, params, config, save_dir='/kaggle/working/song-output')\\n",
+              "if not result.success: raise RuntimeError(result.error or result.status_message)\\n",
+              "print('Generation status:', result.status_message)\\n",
+              "for i, audio in enumerate(result.audios):\\n",
+              "    src = audio['path']\\n",
+              "    dst = f'/kaggle/working/song-output/song-{i+1}.mp3'\\n",
+              "    if src != dst: shutil.copy2(src, dst)\\n",
+              "    print('OUTPUT:', dst)\\n",
               "assert os.path.exists('/kaggle/working/song-output/song-1.mp3'), 'No MP3 output was produced'"
-            ]}
+            ]),
+            code_cell("run-generation", [
+              "! /kaggle/working/ACE-Step-1.5/.venv/bin/python /kaggle/working/run_generation.py"
+            ])
           ]
           notebook={"cells":cells,"metadata":{"kernelspec":{"display_name":"Python 3","language":"python","name":"python3"},"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":5}
           with open("kaggle-job/song.ipynb","w") as f: json.dump(notebook,f)
