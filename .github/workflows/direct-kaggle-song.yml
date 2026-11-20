@@ -55,9 +55,9 @@ jobs:
           import uuid
           delimiter = "ghadelimiter_" + uuid.uuid4().hex
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"caption<<{delimiter}\\n{caption}\\n{delimiter}\\n")
-              f.write(f"lyrics<<{delimiter}\\n{lyrics}\\n{delimiter}\\n")
-              f.write(f"duration={duration}\\n")
+              f.write(f"caption<<{delimiter}\n{caption}\n{delimiter}\n")
+              f.write(f"lyrics<<{delimiter}\n{lyrics}\n{delimiter}\n")
+              f.write(f"duration={duration}\n")
           PY
 
       - name: Acknowledge request
