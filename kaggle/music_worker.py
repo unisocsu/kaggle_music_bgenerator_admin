@@ -443,37 +443,97 @@ def format_prompt(prompt: str, lyrics: str, duration: int, language: str) -> tup
 def gemini_plan(prompt: str, lyrics: str, duration: int, language: str,
                 style: str = "", instructions: str = "", feedback: str = "",
                 previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Gemini acts as the end-to-end producer and technical planner for each song."""
     if not GEMINI_API_KEY:
         log("GEMINI_API_KEY is not configured; using the ACE-Step formatter fallback.")
         return {}
     previous = previous or {}
     request_text = {
-        "user_request": prompt[:4000], "provided_lyrics": lyrics[:12000],
-        "duration_seconds": duration, "vocal_language": language,
-        "style": style[:500], "extra_instructions": instructions[:2000],
+        "user_request": prompt[:4000],
+        "provided_lyrics": lyrics[:12000],
+        "requested_vocal_language": language,
+        "duration_seconds": duration,
+        "style_hint": style[:500],
+        "additional_instructions": instructions[:2000],
         "revision_feedback": feedback[:2000],
-        "previous_plan": {"music_prompt": previous.get("prompt", ""),
-                          "lyrics": previous.get("lyrics", "")} if previous else None,
+        "previous_plan": previous or None,
+        "runtime_capabilities": {
+            "engine": "ACE-Step 1.5",
+            "loaded_dit_model": JOB.get("model", "acestep-v15-turbo"),
+            "loaded_language_model": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
+            "loaded_language_backend": JOB.get("lm_backend", "pt"),
+            "audio_format": "mp3",
+            "batch_size_max": 1,
+            "supported_runtime_controls": {
+                "inference_steps": {"minimum": 4, "maximum": 40, "default": 8},
+                "thinking": "boolean",
+                "use_cot_caption": "boolean",
+                "use_cot_language": "boolean"
+            },
+            "note": "Models are already loaded. Do not request model swaps or unsupported API parameters."
+        }
     }
-    system_instruction = (
-        "You are an expert music producer, songwriter, arranger and album-art director. "
-        "Create a precise ACE-Step 1.5 music plan. Respect language, duration and supplied lyrics. "
-        "Preserve supplied lyrics. If none are supplied, write complete singable lyrics in the "
-        "requested language with [Verse], [Chorus], [Bridge] labels. For revisions preserve "
-        "everything not explicitly changed. Create a separate detailed English square album-cover "
-        "prompt with no text, lettering, logos, watermark or typography. Return ONLY JSON with keys "
-        "music_prompt, lyrics, album_art_prompt, title, genre, mood, arrangement, structure."
-    )
+    # This embedded producer skill is intentionally explicit: infer intent, then translate it
+    # into a complete musical and computational plan rather than filling fixed defaults.
+    producer_skill = """
+ROLE: You are the senior record producer, songwriter, arranger, vocal director and ACE-Step
+technical operator. You own the creative and supported technical decisions for this request.
+
+INTERPRETATION WORKFLOW
+1. Read the entire request, supplied lyrics, language, duration, style hints, revision notes and
+   previous plan. Identify explicit requirements, implied expectations, priorities and conflicts.
+2. Interpret quality words as production intent, not literal labels:
+   - "professional", "high quality", "studio quality", "best possible": perform deep planning,
+     use the highest sensible supported inference_steps (normally 28-40), carefully design
+     structure, arrangement, dynamics, vocal phrasing and transitions.
+   - "quick", "rough idea", "demo", "simple": use a lighter plan and fewer steps (4-10).
+   - "balanced/good quality": choose a sensible middle setting (12-24).
+   These are guidelines; choose based on complexity, duration and runtime budget.
+3. Infer genre, subgenre, mood, energy, tempo/BPM, meter, key/tonal character, groove, instrumentation,
+   production texture, vocal character, dynamics, song sections, transitions and ending. Be coherent:
+   never add details merely to make the plan longer.
+4. Language is a hard constraint. Sing in requested_vocal_language. If it is "he", write natural
+   Hebrew lyrics in Hebrew script, not transliteration and not English. The same applies to all
+   other requested languages. If user supplied lyrics, preserve them unless explicitly asked to edit.
+   Do not silently translate user-provided lyrics. If language is "unknown", infer from the request.
+5. If lyrics are absent and vocals are wanted, write complete singable lyrics in the selected language,
+   with section labels such as [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Outro].
+   Avoid filler, awkward rhymes and unpronounceable phrasing. If instrumental is requested, lyrics="".
+6. Resolve ambiguity with the most reasonable interpretation; do not ask follow-up questions. Honor
+   later revision feedback while preserving everything not requested to change.
+7. Match the plan to the loaded engine/model. The DiT and LM are already loaded; never select a
+   different checkpoint, GPU, backend, or batch size. Do not invent unsupported controls.
+8. Choose inference_steps deliberately within 4-40. Spend more steps for intricate arrangements,
+   demanding quality, or difficult prompts; fewer for quick/simple demos. Do not assume more steps
+   always means better audio. Choose thinking=true and both chain-of-thought assistance flags true
+   unless the request clearly calls for a lighter/quick workflow.
+9. Create a detailed English music_prompt for ACE-Step describing audible musical properties.
+   It must also explicitly state the vocal language. English metadata is fine; sung lyrics must remain
+   in the requested language.
+10. Create a separate square album_art_prompt in English, visually specific, with no text, letters,
+    typography, logo or watermark.
+
+OUTPUT CONTRACT
+Return ONLY valid JSON with these keys:
+music_prompt (string), lyrics (string), album_art_prompt (string), title (string),
+genre (string), subgenre (string), mood (string), energy (string), bpm (integer or null),
+time_signature (string), key (string), vocal_language (string), vocal_style (string),
+instrumentation (array of strings), arrangement (string), structure (string),
+production_notes (string), inference_steps (integer 4-40), thinking (boolean),
+use_cot_caption (boolean), use_cot_language (boolean), instrumental (boolean),
+decision_rationale (string; concise explanation of choices, not hidden chain-of-thought).
+Do not return markdown fences or extra prose.
+"""
     response = requests.post(
         "https://generativelanguage.googleapis.com/v1beta/models/"
         + requests.utils.quote(GEMINI_MODEL, safe="") + ":generateContent",
         headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
         json={
-            "systemInstruction": {"parts": [{"text": system_instruction}]},
+            "systemInstruction": {"parts": [{"text": producer_skill}]},
             "contents": [{"role": "user", "parts": [{"text": json.dumps(request_text, ensure_ascii=False)}]}],
-            "generationConfig": {"temperature": 0.75, "responseMimeType": "application/json",
-                                 "maxOutputTokens": 5000},
-        }, timeout=(15, 90),
+            "generationConfig": {"temperature": 0.65, "responseMimeType": "application/json",
+                                 "maxOutputTokens": 7000},
+        }, timeout=(15, 120),
     )
     if response.status_code >= 400:
         raise RuntimeError(f"Gemini planner HTTP {response.status_code}: {response.text[:500]}")
@@ -486,18 +546,43 @@ def gemini_plan(prompt: str, lyrics: str, duration: int, language: str,
     plan = json.loads(raw)
     if not isinstance(plan, dict):
         raise RuntimeError("Gemini planner response was not a JSON object.")
-    album_prompt = str(plan.get("album_art_prompt") or "").strip()[:3000]
-    if not album_prompt:
-        album_prompt = "Square cinematic album cover, no text or typography. " + prompt[:800]
+    def bounded_int(name: str, default: int, low: int, high: int) -> int:
+        try:
+            return max(low, min(high, int(plan.get(name, default))))
+        except (TypeError, ValueError):
+            return default
+    art = str(plan.get("album_art_prompt") or "").strip()[:3000]
+    if not art:
+        art = "Square cinematic album cover, no text or typography. " + prompt[:800]
+    selected_language = str(plan.get("vocal_language") or language)[:16]
+    selected_lyrics = str(plan.get("lyrics") if plan.get("lyrics") is not None else lyrics).strip()[:12000]
+    instrumental = bool(plan.get("instrumental", False))
+    if instrumental:
+        selected_lyrics = ""
     return {
         "music_prompt": str(plan.get("music_prompt") or prompt).strip()[:4000],
-        "lyrics": str(plan.get("lyrics") if plan.get("lyrics") is not None else lyrics).strip()[:12000],
-        "album_art_prompt": album_prompt,
+        "lyrics": selected_lyrics,
+        "album_art_prompt": art,
         "title": str(plan.get("title") or "")[:120],
         "genre": str(plan.get("genre") or "")[:200],
+        "subgenre": str(plan.get("subgenre") or "")[:200],
         "mood": str(plan.get("mood") or "")[:300],
-        "arrangement": str(plan.get("arrangement") or "")[:1000],
-        "structure": str(plan.get("structure") or "")[:1000],
+        "energy": str(plan.get("energy") or "")[:100],
+        "bpm": plan.get("bpm"),
+        "time_signature": str(plan.get("time_signature") or "")[:20],
+        "key": str(plan.get("key") or "")[:40],
+        "vocal_language": selected_language,
+        "vocal_style": str(plan.get("vocal_style") or "")[:300],
+        "instrumentation": plan.get("instrumentation") if isinstance(plan.get("instrumentation"), list) else [],
+        "arrangement": str(plan.get("arrangement") or "")[:1500],
+        "structure": str(plan.get("structure") or "")[:1500],
+        "production_notes": str(plan.get("production_notes") or "")[:1500],
+        "inference_steps": bounded_int("inference_steps", 8, 4, 40),
+        "thinking": bool(plan.get("thinking", True)),
+        "use_cot_caption": bool(plan.get("use_cot_caption", True)),
+        "use_cot_language": bool(plan.get("use_cot_language", True)),
+        "instrumental": instrumental,
+        "decision_rationale": str(plan.get("decision_rationale") or "")[:600],
         "planner_model": GEMINI_MODEL,
     }
 
@@ -691,18 +776,18 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
     payload = {
         "prompt": caption,
         "lyrics": new_lyrics,
-        "thinking": True,
+        "thinking": bool(plan_meta.get("thinking", True)),
         "use_format": False,
-        "vocal_language": language,
+        "vocal_language": str(plan_meta.get("vocal_language") or language),
         "audio_duration": duration,
         "audio_format": "mp3",
         "model": JOB.get("model", "acestep-v15-turbo"),
         "lm_model_path": JOB.get("lm_model", "acestep-5Hz-lm-0.6B"),
         "lm_backend": JOB.get("lm_backend", "pt"),
-        "inference_steps": 8,
+        "inference_steps": int(plan_meta.get("inference_steps", 8)),
         "batch_size": 1,
-        "use_cot_caption": True,
-        "use_cot_language": True,
+        "use_cot_caption": bool(plan_meta.get("use_cot_caption", True)),
+        "use_cot_language": bool(plan_meta.get("use_cot_language", True)),
     }
     if not new_lyrics.strip():
         payload["sample_mode"] = True
