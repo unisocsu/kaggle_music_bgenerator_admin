@@ -79,6 +79,9 @@ jobs:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IN_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          IN_GEMINI_MODEL: "gemini-3.8-flash"
+          IN_IMAGE_MODEL: "stabilityai/sd-turbo"
           GH_REPO: ${{ github.repository }}
           IN_IDLE_MINUTES: ${{ inputs.idle_minutes }}
           IN_MAX_RUNTIME_MINUTES: ${{ inputs.max_runtime_minutes || '90' }}
