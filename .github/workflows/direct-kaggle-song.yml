@@ -136,7 +136,10 @@ jobs:
       - name: Push and run on Kaggle GPU
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
         run: |
+          set -euo pipefail
           kaggle kernels push -p kaggle-job
           gh issue comment "$ISSUE" --body "🚀 ה־Kernel נשלח ל־Kaggle. ממתין להקצאת GPU ולהתחלת ההרצה."
 
