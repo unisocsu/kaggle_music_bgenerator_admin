@@ -15,17 +15,12 @@ on:
         description: "Duration in seconds; 0 lets the model choose"
         required: true
         type: string
-      issue_number:
-        description: "GitHub Issue used for progress updates"
-        required: true
-        type: string
 
 permissions:
   contents: write
-  issues: write
 
 concurrency:
-  group: direct-kaggle-song-${{ inputs.issue_number || github.run_id }}
+  group: direct-kaggle-song-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -60,17 +55,13 @@ jobs:
               f.write(f"duration={duration}\n")
           PY
 
-      - name: Acknowledge request
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ inputs.issue_number }}
-        run: gh issue comment "$ISSUE" --body "🎛️ הבקשה התקבלה. GitHub Actions מכין עכשיו Kaggle Kernel פרטי עם GPU ומעביר אליו את שלושת השדות המקוריים: caption, lyrics, duration."
-
-      - name: Report preparation stage
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ inputs.issue_number }}
-        run: gh issue comment "$ISSUE" --body "🧰 שלב 1/4: GitHub Actions מכין את סביבת Kaggle ומתקין את כלי ההפעלה."
+      - name: Report request in workflow summary
+        run: |
+          {
+            echo '## 🎛️ Direct song generation'
+            echo '- Request accepted; preparing a private Kaggle GPU kernel.'
+            echo '- Inputs: caption, lyrics, duration.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install Kaggle CLI
         run: |
@@ -81,7 +72,7 @@ jobs:
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-          ISSUE: ${{ inputs.issue_number }}
+          RUN_ID: ${{ github.run_id }}
           CAPTION: ${{ steps.request.outputs.caption }}
           LYRICS: ${{ steps.request.outputs.lyrics }}
           DURATION: ${{ steps.request.outputs.duration }}
@@ -89,13 +80,13 @@ jobs:
           test -n "$KAGGLE_USERNAME" || (echo "Missing KAGGLE_USERNAME secret" && exit 1)
           test -n "$KAGGLE_API_TOKEN" || (echo "Missing KAGGLE_API_TOKEN secret" && exit 1)
           mkdir -p kaggle-job
-          export KERNEL_SLUG="direct-song-issue-$ISSUE"
+          export KERNEL_SLUG="direct-song-run-$RUN_ID"
           python - <<'PY'
           import json, os
           caption = os.environ["CAPTION"]
           lyrics = os.environ["LYRICS"]
           duration = int(os.environ["DURATION"])
-          issue = int(os.environ["ISSUE"])
+          run_id = int(os.environ["RUN_ID"])
           cells = [
             {"cell_type":"markdown","metadata":{},"source":["# Direct ACE-Step 1.5 song generation\n","Private Kaggle GPU kernel. Request values are embedded by the GitHub Actions dispatcher.\n"]},
             {"cell_type":"code","execution_count":None,"metadata":{},"outputs":[],"source":[
@@ -112,7 +103,7 @@ jobs:
               f"CAPTION = {caption!r}\n",
               f"LYRICS = {lyrics!r}\n",
               f"DURATION = {duration!r}\n",
-              f"ISSUE = {issue!r}\n",
+              f"RUN_ID = {run_id!r}\n",
               "assert torch.cuda.is_available(), 'Kaggle GPU is not available'\n",
               "print('GPU:', torch.cuda.get_device_name(0))\n",
               "print('VRAM GiB:', round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2))\n",
@@ -136,7 +127,7 @@ jobs:
           ]
           notebook={"cells":cells,"metadata":{"kernelspec":{"display_name":"Python 3","language":"python","name":"python3"},"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":5}
           with open("kaggle-job/song.ipynb","w") as f: json.dump(notebook,f)
-          meta={"id":os.environ["KAGGLE_USERNAME"]+"/"+os.environ["KERNEL_SLUG"],"title":"Direct song "+str(issue),"code_file":"song.ipynb","language":"python","kernel_type":"notebook","is_private":True,"enable_gpu":True,"enable_internet":True}
+          meta={"id":os.environ["KAGGLE_USERNAME"]+"/"+os.environ["KERNEL_SLUG"],"title":"Direct song run "+str(run_id),"code_file":"song.ipynb","language":"python","kernel_type":"notebook","is_private":True,"enable_gpu":True,"enable_internet":True}
           with open("kaggle-job/kernel-metadata.json","w") as f: json.dump(meta,f,indent=2)
           PY
           printf 'KERNEL_SLUG=%s\n' "$KERNEL_SLUG" >> "$GITHUB_ENV"
@@ -146,18 +137,18 @@ jobs:
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ inputs.issue_number }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           kaggle kernels push -p kaggle-job
-          gh issue comment "$ISSUE" --body "🚀 ה־Kernel נשלח ל־Kaggle. ממתין להקצאת GPU ולהתחלת ההרצה."
+          echo "Kaggle kernel submitted: $KERNEL_REF" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wait for Kaggle kernel
         id: wait
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ inputs.issue_number }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set +e
           reported_running=false
@@ -165,7 +156,7 @@ jobs:
             status="$(kaggle kernels status "$KERNEL_REF" 2>&1)"
             echo "$status"
             if [ "$reported_running" = false ] && echo "$status" | grep -qiE 'running|in progress'; then
-              gh issue comment "$ISSUE" --body "🟡 Kaggle מדווח שה־Kernel פעיל. כעת מתבצעת הכנת סביבת Python, טעינת מודלי ACE-Step ויצירת השיר. עד שההרצה תסתיים, Kaggle אינו מספק ל־Workflow דיווח נפרד שמאשר את רגע סיום טעינת המודל."
+              echo "Kaggle reports the kernel is running." >> "$GITHUB_STEP_SUMMARY"
               reported_running=true
             fi
             if echo "$status" | grep -qiE 'complete|has completed'; then
@@ -173,12 +164,12 @@ jobs:
               exit 0
             fi
             if echo "$status" | grep -qiE 'error|cancelled|failed'; then
-              gh issue comment "$ISSUE" --body "❌ Kaggle דיווח על כשל בהרצת ה־Kernel. פרטי הסטטוס: `$status`"
+              echo "❌ Kaggle kernel failed: $status" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
             sleep 30
           done
-          gh issue comment "$ISSUE" --body "⌛ ההרצה ב־Kaggle עדיין לא הסתיימה במסגרת זמן ההמתנה של ה־Workflow."
+          echo "⌛ Kaggle did not finish within the workflow wait window." >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
       - name: Download Kaggle output
@@ -190,13 +181,17 @@ jobs:
           find result -maxdepth 3 -type f -printf '%p %s bytes\n'
           test -n "$(find result -type f -iname '*.mp3' -print -quit)"
 
-      - name: Publish MP3 release and update Issue
+      - name: Publish MP3 release and update workflow summary
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ inputs.issue_number }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           FILE="$(find result -type f -iname '*.mp3' -print -quit)"
-          TAG="direct-song-issue-$ISSUE"
-          gh release create "$TAG" "$FILE#Generated song (MP3)" --title "Direct song #$ISSUE" --notes "Generated on Kaggle GPU with ACE-Step 1.5. Request: #$ISSUE"
+          TAG="direct-song-run-$GITHUB_RUN_ID"
+          gh release create "$TAG" "$FILE#Generated song (MP3)" --title "Direct song run $GITHUB_RUN_ID" --notes "Generated on Kaggle GPU with ACE-Step 1.5. GitHub Actions run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$FILE")"
-          gh issue comment "$ISSUE" --body "🎵 **היצירה הסתיימה בהצלחה ב־Kaggle GPU.**\n\n[הורדת השיר (MP3)]($URL)\n\nהקובץ פורסם ב־GitHub Release נפרד לבקשה הזו."
+          {
+            echo "## 🎵 Generation completed"
+            echo "[Download the generated MP3]($URL)"
+            echo "Release: $TAG"
+          } >> "$GITHUB_STEP_SUMMARY"
