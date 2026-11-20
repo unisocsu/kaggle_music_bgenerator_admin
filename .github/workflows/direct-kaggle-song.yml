@@ -52,9 +52,11 @@ jobs:
           if not caption or len(caption) > 512: raise SystemExit("caption must contain 1-512 characters")
           if len(lyrics) > 4096: raise SystemExit("lyrics must be at most 4096 characters")
           if duration != 0 and not 10 <= duration <= 600: raise SystemExit("duration must be between 10 and 600 seconds")
+          import uuid
+          delimiter = "ghadelimiter_" + uuid.uuid4().hex
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write("caption=" + caption.replace("%", "%25").replace("\\n", "%0A").replace("\\r", "%0D") + "\\n")
-              f.write("lyrics=" + lyrics.replace("%", "%25").replace("\\n", "%0A").replace("\\r", "%0D") + "\\n")
+              f.write(f"caption<<{delimiter}\\n{caption}\\n{delimiter}\\n")
+              f.write(f"lyrics<<{delimiter}\\n{lyrics}\\n{delimiter}\\n")
               f.write(f"duration={duration}\\n")
           PY
 
