@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import multiprocessing
 import os
 import pathlib
 import re
@@ -25,6 +26,9 @@ GH_API = "https://api.github.com"
 GH_REPO = JOB.get("gh_repo", "")
 GH_OWNER = JOB.get("owner", "")
 GH_TOKEN = JOB.get("gh_token", "")
+GEMINI_API_KEY = JOB.get("gemini_api_key", "")
+GEMINI_MODEL = str(JOB.get("gemini_model", "gemini-3.8-flash"))
+IMAGE_MODEL = str(JOB.get("image_model", "stabilityai/sd-turbo"))
 GH_HEADERS = {
     "Accept": "application/vnd.github+json",
     "Authorization": f"Bearer {GH_TOKEN}",
@@ -425,6 +429,176 @@ def format_prompt(prompt: str, lyrics: str, duration: int, language: str) -> tup
     except Exception as exc:
         log(f"format_input fallback: {type(exc).__name__}: {exc}")
         return prompt, lyrics, {"format_warning": str(exc)[:400]}
+
+
+
+def gemini_plan(prompt: str, lyrics: str, duration: int, language: str,
+                style: str = "", instructions: str = "", feedback: str = "",
+                previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not GEMINI_API_KEY:
+        log("GEMINI_API_KEY is not configured; using the ACE-Step formatter fallback.")
+        return {}
+    previous = previous or {}
+    request_text = {
+        "user_request": prompt[:4000], "provided_lyrics": lyrics[:12000],
+        "duration_seconds": duration, "vocal_language": language,
+        "style": style[:500], "extra_instructions": instructions[:2000],
+        "revision_feedback": feedback[:2000],
+        "previous_plan": {"music_prompt": previous.get("prompt", ""),
+                          "lyrics": previous.get("lyrics", "")} if previous else None,
+    }
+    system_instruction = (
+        "You are an expert music producer, songwriter, arranger and album-art director. "
+        "Create a precise ACE-Step 1.5 music plan. Respect language, duration and supplied lyrics. "
+        "Preserve supplied lyrics. If none are supplied, write complete singable lyrics in the "
+        "requested language with [Verse], [Chorus], [Bridge] labels. For revisions preserve "
+        "everything not explicitly changed. Create a separate detailed English square album-cover "
+        "prompt with no text, lettering, logos, watermark or typography. Return ONLY JSON with keys "
+        "music_prompt, lyrics, album_art_prompt, title, genre, mood, arrangement, structure."
+    )
+    response = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        + requests.utils.quote(GEMINI_MODEL, safe="") + ":generateContent",
+        headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
+        json={
+            "systemInstruction": {"parts": [{"text": system_instruction}]},
+            "contents": [{"role": "user", "parts": [{"text": json.dumps(request_text, ensure_ascii=False)}]}],
+            "generationConfig": {"temperature": 0.75, "responseMimeType": "application/json",
+                                 "maxOutputTokens": 5000},
+        }, timeout=(15, 90),
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Gemini planner HTTP {response.status_code}: {response.text[:500]}")
+    payload = response.json()
+    candidates = payload.get("candidates") or []
+    parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+    raw = "\n".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
+    if not raw:
+        raise RuntimeError("Gemini planner returned no text.")
+    plan = json.loads(raw)
+    if not isinstance(plan, dict):
+        raise RuntimeError("Gemini planner response was not a JSON object.")
+    album_prompt = str(plan.get("album_art_prompt") or "").strip()[:3000]
+    if not album_prompt:
+        album_prompt = "Square cinematic album cover, no text or typography. " + prompt[:800]
+    return {
+        "music_prompt": str(plan.get("music_prompt") or prompt).strip()[:4000],
+        "lyrics": str(plan.get("lyrics") if plan.get("lyrics") is not None else lyrics).strip()[:12000],
+        "album_art_prompt": album_prompt,
+        "title": str(plan.get("title") or "")[:120],
+        "genre": str(plan.get("genre") or "")[:200],
+        "mood": str(plan.get("mood") or "")[:300],
+        "arrangement": str(plan.get("arrangement") or "")[:1000],
+        "structure": str(plan.get("structure") or "")[:1000],
+        "planner_model": GEMINI_MODEL,
+    }
+
+
+def generate_album_cover_process(prompt: str, output_path: str, status_path: str,
+                                 gpu_index: int = 1) -> None:
+    try:
+        import torch
+        from diffusers import StableDiffusionPipeline
+        if not torch.cuda.is_available() or torch.cuda.device_count() <= gpu_index:
+            raise RuntimeError(f"CUDA device {gpu_index} is unavailable in the cover process.")
+        device = f"cuda:{gpu_index}"
+        torch.cuda.set_device(gpu_index)
+        pipe = StableDiffusionPipeline.from_pretrained(
+            IMAGE_MODEL, torch_dtype=torch.float16, variant="fp16", use_safetensors=True,
+        ).to(device)
+        pipe.set_progress_bar_config(disable=True)
+        generator = torch.Generator(device=device).manual_seed(int(time.time()) % (2**31 - 1))
+        with torch.inference_mode():
+            result = pipe(
+                prompt=prompt,
+                negative_prompt="text, letters, typography, watermark, logo, blurry, low quality",
+                height=512, width=512, num_inference_steps=4, guidance_scale=0.0,
+                generator=generator,
+            )
+        result.images[0].save(output_path, format="JPEG", quality=92, optimize=True)
+        del pipe
+        torch.cuda.empty_cache()
+        pathlib.Path(status_path).write_text(json.dumps({"ok": True}), encoding="utf-8")
+    except Exception as exc:
+        pathlib.Path(status_path).write_text(
+            json.dumps({"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:900]}"}),
+            encoding="utf-8",
+        )
+
+
+def start_album_cover(prompt: str, version: int) -> tuple[multiprocessing.Process | None, pathlib.Path, pathlib.Path]:
+    cover_path = OUT / f"album-cover-v{version}.jpg"
+    status_path = OUT / f"album-cover-v{version}.json"
+    cover_path.unlink(missing_ok=True)
+    status_path.unlink(missing_ok=True)
+    try:
+        raw = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"],
+            text=True, timeout=10,
+        )
+        devices = list(csv.reader(io.StringIO(raw)))
+        if len(devices) < 2:
+            log("Album art skipped: Kaggle exposed fewer than two GPUs.")
+            return None, cover_path, status_path
+        second = [cell.strip() for cell in devices[1]]
+        free_gb = float(second[1]) / 1024
+        if free_gb < 7.0:
+            log(f"Album art skipped: GPU 1 has only {free_gb:.1f}GB free VRAM (7GB required).")
+            return None, cover_path, status_path
+        log(f"Starting album-cover generation on GPU {second[0]} in parallel with ACE-Step.")
+        process = multiprocessing.get_context("spawn").Process(
+            target=generate_album_cover_process,
+            args=(prompt, str(cover_path), str(status_path), int(second[0])),
+            daemon=True,
+        )
+        process.start()
+        return process, cover_path, status_path
+    except Exception as exc:
+        log(f"Album art could not start: {type(exc).__name__}: {exc}")
+        return None, cover_path, status_path
+
+
+def finish_album_cover(process: multiprocessing.Process | None, cover_path: pathlib.Path,
+                       status_path: pathlib.Path, timeout: float) -> pathlib.Path | None:
+    if process is None:
+        return None
+    process.join(timeout=max(0.1, timeout))
+    if process.is_alive():
+        log("Album art exceeded the remaining worker time; terminating the image process.")
+        process.terminate()
+        process.join(timeout=5)
+        return None
+    if process.exitcode != 0:
+        log(f"Album-art process exited with code {process.exitcode}.")
+        return None
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception:
+        log("Album-art process finished without a status file.")
+        return None
+    if not status.get("ok") or not cover_path.is_file() or not cover_path.stat().st_size:
+        log("Album art failed: " + str(status.get("error") or "image file missing")[:900])
+        return None
+    log(f"Album cover ready: {cover_path.name}")
+    return cover_path
+
+
+def embed_album_cover(audio_path: pathlib.Path, cover_path: pathlib.Path, version: int) -> pathlib.Path:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is not installed; cannot embed album artwork.")
+    output_path = OUT / f"song-v{version}-with-cover.mp3"
+    subprocess.run(
+        [ffmpeg, "-y", "-i", str(audio_path), "-i", str(cover_path),
+         "-map", "0:a:0", "-map", "1:v:0", "-c:a", "copy", "-c:v", "mjpeg",
+         "-id3v2_version", "3", "-metadata:s:v", "title=Album cover",
+         "-metadata:s:v", "comment=Cover (front)", "-disposition:v:0", "attached_pic",
+         str(output_path)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
+    )
+    if not output_path.is_file() or not output_path.stat().st_size:
+        raise RuntimeError("FFmpeg did not produce the MP3 with embedded cover art.")
+    return output_path
 
 
 def parse_result(value: Any) -> dict[str, Any]:
