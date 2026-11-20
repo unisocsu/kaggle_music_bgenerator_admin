@@ -174,5 +174,5 @@ jobs:
           FILE="$(find result -type f -iname '*.mp3' -print -quit)"
           TAG="direct-song-issue-$ISSUE"
           gh release create "$TAG" "$FILE#Generated song (MP3)" --title "Direct song #$ISSUE" --notes "Generated on Kaggle GPU with ACE-Step 1.5. Request: #$ISSUE"
-          URL="$(gh release view "$TAG" --json assets --jq '.assets[0].browser_download_url')"
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$FILE")"
           gh issue comment "$ISSUE" --body "🎵 **היצירה הסתיימה בהצלחה ב־Kaggle GPU.**\n\n[הורדת השיר (MP3)]($URL)\n\nהקובץ פורסם ב־GitHub Release נפרד לבקשה הזו."
