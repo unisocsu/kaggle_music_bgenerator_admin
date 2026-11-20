@@ -9,6 +9,9 @@ This repository follows the GitHub-Issues control plane used in `unisocsu/cpu-an
 - Browser chat creates one GitHub Issue per song project.
 - A GitHub Actions workflow pushes a private Kaggle GPU kernel.
 - Kaggle runs ACE-Step 1.5 (Turbo DiT + configurable 5Hz LM).
+- Gemini 3.8 Flash plans the arrangement, refines/generates lyrics when none are supplied, and writes a separate English album-art prompt.
+- Stable Diffusion Turbo generates a 512×512 cover on GPU 1 while ACE-Step generates audio on GPU 0. The image step is skipped if a second GPU or sufficient free VRAM is unavailable.
+- FFmpeg embeds the cover as the MP3 front-cover image without re-encoding audio; the ZIP also contains `album-cover.jpg`.
 - The worker updates the Issue with live stage/status messages.
 - A generated version is packaged as a ZIP and uploaded to a GitHub Release.
 - The page reads the release, downloads the ZIP, extracts the MP3 into a browser Blob, and plays it.
@@ -37,6 +40,8 @@ In GitHub → Settings → Secrets and variables → Actions, add:
 - `KAGGLE_USERNAME`: your Kaggle username
 - `KAGGLE_API_TOKEN`: your Kaggle API token
 - `GEMINI_API_KEY`: Google AI Studio API key used by the Gemini music planner (optional; without it, the worker falls back to ACE-Step prompt formatting and a prompt-derived cover).
+
+The Gemini key is passed from GitHub Actions to the private Kaggle kernel at launch; it is not written to the public repository. Never paste the key into an Issue or prompt.
 
 The GitHub workflow uses its temporary `GITHUB_TOKEN` with Issues and Contents write permissions to update Issues and publish Release assets.
 
