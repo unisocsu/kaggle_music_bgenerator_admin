@@ -31,11 +31,11 @@ button{border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:70
 </section></main>
 <script>
 const REPO='unisocsu/kaggle_music_bgenerator_admin';
-const form=document.querySelector('#form'),status=document.querySelector('#status'),btn=document.querySelector('#submit');\ndocument.querySelector('#token').value=sessionStorage.getItem('direct_song_token')||'';\nlet pollHandle=null;\nasync function pollIssue(token,number){\n try{const r=await fetch('https://api.github.com/repos/'+REPO+'/issues/'+number+'/comments',{headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json'}});const comments=await r.json();if(!r.ok)throw new Error(comments.message||r.status);const lines=comments.map(x=>x.body).filter(Boolean);const last=lines.slice(-5).join('\\n\\n');if(last){status.innerHTML='Issue #'+number+' — עדכונים אחרונים:<pre style="white-space:pre-wrap;direction:auto">'+last.replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))+'</pre><a target="_blank" rel="noopener" href="https://github.com/'+REPO+'/issues/'+number+'">פתיחת Issue</a>';} }catch(e){console.warn(e)}\n}
+const form=document.querySelector('#form'),status=document.querySelector('#status'),btn=document.querySelector('#submit');\ndocument.querySelector('#token').value=sessionStorage.getItem('direct_song_token')||'';\nlet pollHandle=null;\nasync function pollIssue(token,number){\n try{const r=await fetch('https://api.github.com/repos/'+REPO+'/issues/'+number+'/comments',{headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json'}});const comments=await r.json();if(!r.ok)throw new Error(comments.message||r.status);const lines=comments.map(x=>x.body).filter(Boolean);const last=lines.slice(-5).join('\n\n');if(last){status.innerHTML='Issue #'+number+' — עדכונים אחרונים:<pre style="white-space:pre-wrap;direction:auto">'+last.replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))+'</pre><a target="_blank" rel="noopener" href="https://github.com/'+REPO+'/issues/'+number+'">פתיחת Issue</a>';} }catch(e){console.warn(e)}\n}
 function show(s){status.style.display='block';status.textContent=s}
 form.addEventListener('submit',async e=>{
  e.preventDefault();
- const token=prompt('הדבק GitHub token עם הרשאות Issues: Read and write ו־Metadata: Read');
+ const token=prompt('GitHub token with Issues read/write and Metadata read');
  if(!token)return;
  const caption=document.querySelector('#caption').value.trim();
  const lyrics=document.querySelector('#lyrics').value;
@@ -43,12 +43,12 @@ form.addEventListener('submit',async e=>{
  if(!caption||!Number.isInteger(duration)||duration<10||duration>300){show('יש להזין caption ומשך בין 10 ל־300 שניות.');return}
  btn.disabled=true;show('פותח בקשת יצירה ב־GitHub Issues…');
  const payload=JSON.stringify({caption,lyrics,duration});
- const body='<!-- kaggle-direct-song-request -->\\n'+
- '<!-- payload:start -->\\n'+payload+'\\n<!-- payload:end -->\\n\\n'+
- '## Direct ACE-Step GPU request\\n\\n'+
- '**Caption**\\n\\n'+caption+'\\n\\n'+
- '**Lyrics**\\n\\n'+(lyrics||'[empty]')+'\\n\\n'+
- '**Duration**\\n\\n'+duration+'\\n';
+ const body='<!-- kaggle-direct-song-request -->\n'+
+ '<!-- payload:start -->\n'+payload+'\n<!-- payload:end -->\n\n'+
+ '## Direct ACE-Step GPU request\n\n'+
+ '**Caption**\n\n'+caption+'\n\n'+
+ '**Lyrics**\n\n'+(lyrics||'[empty]')+'\n\n'+
+ '**Duration**\n\n'+duration+'\n';
  try{
   const r=await fetch('https://api.github.com/repos/'+REPO+'/issues',{
    method:'POST',headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28'},
