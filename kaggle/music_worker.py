@@ -650,7 +650,8 @@ def task_failure_details(task_result: dict[str, Any], task_id: str) -> str:
 
 
 def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
-                   language: str, version: int, feedback: str = "") -> tuple[pathlib.Path, str, str, dict[str, Any]]:
+                    language: str, version: int, feedback: str = "", style: str = "",
+                    instructions: str = "", previous: dict[str, Any] | None = None) -> tuple[pathlib.Path, str, str, dict[str, Any]]:
     set_progress(issue_number, "👀 ראיתי את הפרומפט",
                  "מודל השפה קורא עכשיו את הבקשה ומכין את תיאור המוזיקה.")
     source_prompt = prompt
@@ -660,6 +661,21 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
             "Apply the requested musical changes while preserving the parts the user did not ask to change. "
             "Be specific about arrangement, instrumentation, energy, vocal phrasing and song structure."
         )
+    plan_meta: dict[str, Any] = {}
+    album_art_prompt = ""
+    try:
+        plan_meta = gemini_plan(source_prompt, lyrics, duration, language, style, instructions, feedback, previous)
+        if plan_meta:
+            source_prompt = str(plan_meta.get("music_prompt") or source_prompt)
+            lyrics = str(plan_meta.get("lyrics") or lyrics)
+            album_art_prompt = str(plan_meta.get("album_art_prompt") or "")
+            log(f"Gemini planner completed using {plan_meta.get('planner_model')}.")
+    except Exception as exc:
+        log(f"Gemini planner fallback: {type(exc).__name__}: {str(exc)[:500]}")
+        plan_meta = {"planner_warning": f"{type(exc).__name__}: {str(exc)[:300]}"}
+    if not album_art_prompt:
+        album_art_prompt = "Square professional album cover inspired by this music. No text, lettering or logos. " + source_prompt[:1200]
+    cover_process, cover_path, cover_status = start_album_cover(album_art_prompt, version)
     caption, new_lyrics, format_meta = format_prompt(source_prompt, lyrics, duration, language)
 
     set_progress(issue_number, "מכין משימת יצירת אודיו",
@@ -736,8 +752,18 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
         raise RuntimeError("Downloaded audio is empty.")
 
     actual_lyrics = str(task_result.get("lyrics") or new_lyrics or "").strip()
+    remaining_for_cover = max(1.0, WORKER_DEADLINE - time.time()) if WORKER_DEADLINE else 600.0
+    generated_cover = finish_album_cover(cover_process, cover_path, cover_status, remaining_for_cover)
+    if generated_cover:
+        try:
+            audio_file = embed_album_cover(audio_file, generated_cover, version)
+        except Exception as exc:
+            log(f"Could not embed album cover; keeping original MP3: {type(exc).__name__}: {exc}")
     meta = {
         "task_id": task_id,
+        "album_cover": generated_cover.name if generated_cover else None,
+        "album_art_prompt": album_art_prompt,
+        "planner": plan_meta,
         "version": version,
         "duration_seconds": duration,
         "vocal_language": language,
@@ -792,6 +818,9 @@ def publish_version(issue_number: int, version: int, audio_file: pathlib.Path,
     shutil.rmtree(bundle, ignore_errors=True)
     bundle.mkdir(parents=True)
     shutil.copy2(audio_file, bundle / "song.mp3")
+    cover_file = OUT / str(meta.get("album_cover") or "")
+    if cover_file.is_file():
+        shutil.copy2(cover_file, bundle / "album-cover.jpg")
     (bundle / "prompt.txt").write_text(caption + "\n", encoding="utf-8")
     (bundle / "lyrics.txt").write_text(lyrics + "\n", encoding="utf-8")
     (bundle / "improvement-notes.txt").write_text(feedback + "\n", encoding="utf-8")
@@ -839,6 +868,7 @@ def publish_result(issue_number: int, version: int, caption: str, lyrics: str,
     )
     public_meta = {
         "version": version, "prompt": caption, "lyrics": lyrics,
+        "album_cover": meta.get("album_cover"),
         "release_url": links["release_url"], "zip_url": links["zip_url"],
         "mp3_url": links["mp3_url"], "task_id": meta.get("task_id"),
     }
@@ -868,7 +898,8 @@ def handle_generation(issue: dict[str, Any], request_data: dict[str, Any], feedb
 
     try:
         audio_file, caption, new_lyrics, meta = generate_audio(
-            issue_number, base_prompt, lyrics, duration, language, version, feedback
+            issue_number, base_prompt, lyrics, duration, language, version, feedback,
+            style, instructions, previous
         )
         links = publish_version(issue_number, version, audio_file, caption, new_lyrics, meta, feedback)
         LAST_ACTIVITY = time.time()
