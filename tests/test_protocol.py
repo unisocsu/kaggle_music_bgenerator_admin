@@ -77,6 +77,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(parse_request_body("plain issue"))
         self.assertIsNone(parse_request_body(REQUEST_MARKER + "\n{broken}"))
 
+    def test_gemini_planner_falls_back_when_secret_is_not_configured(self):
+        if worker is None:
+            self.skipTest("requests is not installed")
+        original = worker.GEMINI_API_KEY
+        worker.GEMINI_API_KEY = ""
+        try:
+            self.assertEqual(worker.gemini_plan("instrumental piano", "", 120, "en"), {})
+        finally:
+            worker.GEMINI_API_KEY = original
+
     def test_parse_release_metadata(self):
         meta = {
             "version": 2,
