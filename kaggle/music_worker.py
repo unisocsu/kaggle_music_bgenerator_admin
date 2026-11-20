@@ -766,6 +766,18 @@ def generate_audio(issue_number: int, prompt: str, lyrics: str, duration: int,
     except Exception as exc:
         log(f"Gemini planner fallback: {type(exc).__name__}: {str(exc)[:500]}")
         plan_meta = {"planner_warning": f"{type(exc).__name__}: {str(exc)[:300]}"}
+    if plan_meta:
+        # Gemini owns creative decisions, but the user's explicit language choice wins.
+        language = str(plan_meta.get("vocal_language") or language)[:16]
+        if plan_meta.get("instrumental"):
+            lyrics = ""
+        log(
+            "Gemini production decisions: "
+            f"genre={plan_meta.get('genre') or 'unspecified'}; "
+            f"BPM={plan_meta.get('bpm')}; "
+            f"steps={plan_meta.get('inference_steps', 8)}; "
+            f"language={language}; instrumental={bool(plan_meta.get('instrumental'))}"
+        )
     if not album_art_prompt:
         album_art_prompt = "Square professional album cover inspired by this music. No text, lettering or logos. " + source_prompt[:1200]
     cover_process, cover_path, cover_status = start_album_cover(album_art_prompt, version)
