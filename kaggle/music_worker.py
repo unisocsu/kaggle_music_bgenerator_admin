@@ -319,6 +319,14 @@ def install_and_start_ace() -> None:
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "uv"], check=True)
     subprocess.run(["uv", "sync", "--no-dev"], cwd=repo_dir, check=True)
 
+    # Install the lightweight inference stack in Kaggle's base Python environment.
+    # ACE-Step remains isolated in its own uv environment; the image child uses cuda:1.
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q",
+         "diffusers", "transformers", "accelerate", "safetensors"],
+        check=True,
+    )
+
     venv_python = repo_dir / ".venv" / "bin" / "python"
     if not venv_python.exists():
         raise RuntimeError("ACE-Step virtual environment was not created by uv sync.")
